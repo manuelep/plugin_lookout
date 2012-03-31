@@ -5,19 +5,30 @@ from plugin_lookout import IS_VALID_SQL_TABLE_NAME
 
 from gluon.storage import Storage
 
-################################################################## CONNECTIONS #
+'''
+permissions = dict(
+    lettura/scrittura a utenti di un gruppo di appartenenza o tutti
+    * dato condiviso (sì/no)
+    * con chi (utenti loggati o uno specifico gruppo tra quelli cui si appartiene)
+)
 
+connessioni private ma gestite in modo da non creare doppioni di oggetti
+'''
+
+################################################################## CONNECTIONS #
+from random import randint
 db.define_table('plugin_lookout_connections',
-    Field('alias'),
+    Field('alias', readable=False, required=True, writable=False),
     Field('dsn'), #  requires=IS_EXPR('value.count("%s")==1')
     Field('pwd', 'password', readable=False),
     Field('is_active', 'boolean', default=True),
+#    Field('is_shared', 'boolean', default=False),
     auth.signature.created_by,
-    format = lambda r: '%s: %s' % (r.alias, r.dsn.replace('%s', '<password>'))
+    format = '%(alias)s' # lambda r: r.dsn.replace('%s', randint(8,16)*'*')
 )
 
 db.plugin_lookout_connections.alias.requires = IS_NOT_IN_DB(db, 'plugin_lookout_connections.alias')
-db.plugin_lookout_connections.dsn.requires = IS_NOT_IN_DB(db, 'plugin_lookout_connections.dsn')
+#db.plugin_lookout_connections.dsn.requires = IS_NOT_IN_DB(db, 'plugin_lookout_connections.dsn')
 f_max = db.plugin_lookout_connections.id.max()
 id_max = db().select(f_max).first()[f_max] or 0
 db.plugin_lookout_connections.alias.default = 'db_%s' % (int(id_max) + 1)
@@ -36,7 +47,8 @@ def define_dbs():
     return plugin_lookout_dbs
 
 for k,v in define_dbs().items():
-    exec('%s=v' % k)
+    if k not in globals().keys() + ['db']:
+        exec('%s=v' % k)
 
 
 ####################################################################### TABLES #
@@ -53,13 +65,17 @@ db.define_table('plugin_lookout_tables',
     Field('table_name', label=T('Table name'), required=True,
         ondelete='CASCADE'
     ),
-    Field('table_migrate', 'boolean', default=False, readable=False, writable=False, update=False,
+    Field('table_migrate', 'boolean', default=False, readable=False, writable=False,
         label='Migrate', comment=T('Create the table?')),
     Field('table_singular', label=T('Singular')),
     Field('table_plural', label=T('Plural')),
-    Field('connection', db.plugin_lookout_connections, required=True),
-    Field('is_active', 'boolean', default=False, label=T('Active'), comment=T('Let the table be recognized from db?')),
+    Field('restricted', 'boolean', default=False),
+    Field('connection', db.plugin_lookout_connections, required=True,
+        requires = IS_IN_DB(db(db.plugin_lookout_connections.created_by==auth.user_id), 'plugin_lookout_connections.id', '%(dsn)s')
+    ),
+    Field('is_active', 'boolean', default=True, label=T('Active'), comment=T('Let the table be recognized from db?')),
     Field('is_view', 'boolean', label=T('View'), default=False, writable=False, readable=False),
+    auth.signature.created_by,
     format='%(tab_name)s',
     singular="Tabella", plural="Tabelle"
 )
@@ -98,69 +114,124 @@ db.define_table('plugin_lookout_fields',
     Field('field_comment', label=T('Comment'))
 )
 
+#def setup_permission(grop_id, name, table_name):
+#    where = (db.auth_permission.group_id==group_id)\
+#        &(db.auth_permission.name==name)\
+#        &(db.auth_permission.tab_name==table_name)
+#    res = db(where).select()
+#    if not res:
+#        auth.add_permission(group_id, name, table_name)
+
 def define_tables(fake_migrate=False):
-        try:
-            import ppygis
-        except:
-            geom_representation = lambda value: value
-        else:
-            geom_representation = lambda value: str(ppygis.Geometry.read_ewkb(value))
+    try:
+        import ppygis
+    except:
+        geom_representation = lambda value: value
+    else:
+        geom_representation = lambda value: str(ppygis.Geometry.read_ewkb(value))
 
-        join = db.plugin_lookout_tables.connection == db.plugin_lookout_connections.id
-        where = (db.plugin_lookout_tables.is_active==True)&(db.plugin_lookout_connections.is_active==True)
-        res_tables = db(join&where).select(db.plugin_lookout_connections.ALL, db.plugin_lookout_tables.ALL)
-        res_fields = db(db.plugin_lookout_fields).select(orderby=db.plugin_lookout_fields.tables)
+    join = db.plugin_lookout_tables.connection == db.plugin_lookout_connections.id
+    where = (db.plugin_lookout_tables.is_active==True)&(db.plugin_lookout_connections.is_active==True)
+    res_tables = db(join&where).select(db.plugin_lookout_connections.ALL, db.plugin_lookout_tables.ALL)
+    res_fields = db(db.plugin_lookout_fields).select(orderby=db.plugin_lookout_fields.tables)
 
-        translate = dict(
-            field_type = 'type',
-            field_label = 'label',
-            field_length = 'length',
-            field_comment = 'comment'
-        )
+    translate = dict(
+        field_type = 'type',
+        field_label = 'label',
+        field_length = 'length',
+        field_comment = 'comment'
+    )
 
-        validators = dict(
-            date = IS_DATE,
-            datetime = IS_DATETIME,
-            time = IS_TIME
-        )
+    validators = dict(
+        date = IS_DATE,
+        datetime = IS_DATETIME,
+        time = IS_TIME
+    )
 
-        for rec_table in res_tables:
-            field_list = list()
-            geoms = dict(geometry=[], geography=[])
-            for rec_field in res_fields.find(lambda row: rec_table.plugin_lookout_tables.id in row.tables):
+    for rec_table in res_tables:
+        field_list = list()
+        geoms = dict(geometry=[], geography=[])
+        for rec_field in res_fields.find(lambda row: rec_table.plugin_lookout_tables.id in row.tables):
 
-                n_r_f = [i for i in rec_field.as_dict() if not db.plugin_lookout_fields[i].required]
-                kwargs = dict([(translate[k],rec_field[k]) for k in n_r_f if rec_field[k] not in ('', None, ) and translate.get(k)])
+            # DUCK DEBUG
+            #+ n_r_f: Not Required Fields. Ovvero campi non obbligatori
+            n_r_f = [i for i in rec_field.as_dict() if not db.plugin_lookout_fields[i].required]
+            kwargs = dict([(translate[k],rec_field[k]) for k in n_r_f if rec_field[k] not in ('', None, ) and translate.get(k)])
 
-                if rec_field.field_type in ('date', 'datetime', 'time', ) and rec_field.field_format:
-                    kwargs['requires'] = IS_EMPTY_OR(validators.get(rec_field.field_type)(format=rec_field.field_format))
-                elif rec_field.field_type in ('geometry', 'geography', ): # at the moment geometryes are managed as only visible string
-                    if not hasattr(Field, 'st_asgeojson'):
-                        geoms[rec_field.field_type].append(rec_field.field_name)
-                        kwargs['type'] = 'text'
-                        kwargs['writable'] = False
-                        kwargs['represent'] = lambda value,row: '%s ...' % geom_representation(value)[:50]
-                field_list.append(Field(rec_field.field_name, **kwargs))
+            if rec_field.field_type in ('date', 'datetime', 'time', ) and rec_field.field_format:
+                kwargs['requires'] = IS_EMPTY_OR(validators.get(rec_field.field_type)(format=rec_field.field_format))
+            elif rec_field.field_type in ('geometry', 'geography', ): 
+                if not hasattr(Field, 'st_asgeojson'):
+                    geoms[rec_field.field_type].append(rec_field.field_name)
+                    kwargs['type'] = 'text'
+                    kwargs['writable'] = False # if unsupported geometryes are managed as visible only text record
+                    kwargs['represent'] = lambda value,row: '%s ...' % geom_representation(value)[:50]
+            field_list.append(Field(rec_field.field_name, **kwargs))
 
-            mydb = globals()[rec_table.plugin_lookout_connections.alias]
-            table = mydb.Table(mydb, rec_table.plugin_lookout_tables.table_name, *field_list)
+        mydb = globals()[rec_table.plugin_lookout_connections.alias]
+#        import ipdb; ipdb.set_trace()
+        table = mydb.Table(mydb, rec_table.plugin_lookout_tables.table_name, *field_list)
 
-            if not hasattr(mydb, rec_table.plugin_lookout_tables.table_name.lower()):
-                t_kwargs = dict([(k,t['table_%s' %k]) for k in ('singular', 'plural', ) if rec_table.plugin_lookout_tables['table_%s' %k] not in ('', None, )])
+        if not hasattr(mydb, rec_table.plugin_lookout_tables.table_name.lower()):
+            t_kwargs = dict([(k,rec_table.plugin_lookout_tables['table_%s' %k]) for k in ('singular', 'plural', ) if rec_table.plugin_lookout_tables['table_%s' %k] not in ('', None, )])
 
-                mydb.define_table(rec_table.plugin_lookout_tables.table_name,
-                    migrate=rec_table.plugin_lookout_tables.table_migrate, fake_migrate=fake_migrate,
-                    *field_list,
-                    **t_kwargs
-                )
-                if rec_table.plugin_lookout_tables.table_migrate:
-                    for k,v in geoms.items():
-                        for i in v:
-                            r = mydb.executesql("select data_type from information_schema.columns where table_name='%s' AND column_name='%s'" % (rec_table.plugin_lookout_tables.tab_name, i))
-                            if r[0][0] != 'text':
-                                mydb.executesql('ALTER TABLE %s ALTER COLUMN %s TYPE %s;' % (t.tab_name, i, k))
+            mydb.define_table(rec_table.plugin_lookout_tables.table_name,
+                migrate=rec_table.plugin_lookout_tables.table_migrate, fake_migrate=fake_migrate,
+                *field_list,
+                **t_kwargs
+            )
+            if rec_table.plugin_lookout_tables.table_migrate:
+                for k,v in geoms.items():
+                    for i in v:
+                        r = mydb.executesql("select data_type from information_schema.columns where table_name='%s' AND column_name='%s'" % (rec_table.plugin_lookout_tables.tab_name, i))
+                        if r[0][0] != 'text':
+                            mydb.executesql('ALTER TABLE %s ALTER COLUMN %s TYPE %s;' % (t.tab_name, i, k))
 
 define_tables()
+
+def get_table_restriction(table_id, action='w'):
+    rec_table = db(db.plugin_lookout_tables.id==table_id).select().first()
+    if rec_table:
+        t_hash = '%s_%s' % (globals()[rec_table.connection.alias]._uri_hash, rec_table.table_name)
+    else:
+        return False
+    if rec_table.restricted:
+        if action=='w':
+            role = 'write_%s' % t_hash
+        elif action=='r':
+            role = 'read_%s' % t_hash
+        else:
+            return False
+        return auth.has_membership(user_id=auth.user_id, role=role)
+    else:
+        return True
+
+def set_ownership(table_name):
+    for row in db(db[table_name]).select():
+        owner = row.created_by
+        for irow in db(db[table_name].created_by==owner)\
+            .select():
+            restricted = irow.get('restricted') or irow.restricted
+            if restricted:
+                if not auth.has_permission(table_name=table_name,
+                    user_id=owner,
+                    record_id=irow.id):
+                    group_id = db(db.auth_group.role=='user_%s' % owner)\
+                        .select(db.auth_group.id).first().id
+                    auth.add_permission(table_name=table_name,
+                        group_id=group_id,
+                        record_id=irow.id)
+                        
+#set_ownership('plugin_lookout_connections')
+#set_ownership('plugin_lookout_tables')
+
+
+def clean_permission():
+    for table_name in ('plugin_lookout_connections', 'plugin_lookout_tables', ):
+        ids = db(db[table_name])._select(db[table_name].id)
+        db((db.auth_permission.table_name==table_name)&(~db.auth_permission.record_id.belongs(ids))).delete()
+clean_permission()
+
 
 
 response.menu+=[
