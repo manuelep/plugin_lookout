@@ -211,7 +211,8 @@ def set_ownership(table_name):
         owner = row.created_by
         for irow in db(db[table_name].created_by==owner)\
             .select():
-            restricted = irow.get('restricted') or irow.restricted
+            restricted = irow.get('restricted')
+            if restricted == None: restricted = True
             if restricted:
                 if not auth.has_permission(table_name=table_name,
                     user_id=owner,
