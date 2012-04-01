@@ -1,4 +1,20 @@
+
 # coding: utf8
+
+#    This file is part of plugin_lookout.
+
+#    Plugin_lookout is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+
+#    Plugin_lookout is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with Nome-Programma.  If not, see <http://www.gnu.org/licenses/>.
 
 from gluon.custom_import import track_changes; track_changes(True)
 from plugin_lookout import IS_VALID_SQL_TABLE_NAME
@@ -49,6 +65,7 @@ def define_dbs():
 for k,v in define_dbs().items():
     if k not in globals().keys() + ['db']:
         exec('%s=v' % k)
+        del v
 
 
 ####################################################################### TABLES #

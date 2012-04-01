@@ -1,4 +1,21 @@
+
 # coding: utf8
+
+#    This file is part of plugin_lookout.
+
+#    Plugin_lookout is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+
+#    Plugin_lookout is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with Nome-Programma.  If not, see <http://www.gnu.org/licenses/>.
+
 # prova qualcosa come
 def index(): return dict(message="hello from plugin_lookout.py")
 
@@ -14,6 +31,9 @@ def index(): return dict(message="hello from plugin_lookout.py")
 #            db.commit()
 
 def conn_onvalidation(form):
+    '''
+    The callback function for the connections form
+    '''
     if form.vars.pwd:
         uri = form.vars.dsn % form.vars.pwd
     else:
@@ -69,9 +89,11 @@ def plugin_lookout_connections():
     return dict(form=form) #, dbs=dbs)
 
 def tab_onvalidation(form):
+    '''
+    The callback function for the tables form
+    '''
     # on create
     from plugin_lookout import db_got_table
-    from gluon.storage import Storage
     if 'new' in request.args:
         db_alias = db(db.plugin_lookout_connections.id==form.vars.connection).select(db.plugin_lookout_connections.alias).first().alias
         mydb = globals()[db_alias]
@@ -206,6 +228,7 @@ def plugin_lookout_external_tables():
     rec_table = db(db.plugin_lookout_tables.id==table_id).select().first()
     mydb = globals()[rec_table.connection.alias]
     if rec_table.table_name not in mydb.tables:
+        session.flash = T('Table "%s" is not recognized from db model. maybe it\'s not active') % rec_table.table_name
         session.flash = 'La tabella "%s" non riconosciuta in database o non attiva.' % rec_table.table_name
         redirect(URL('plugin_lookout_tables'))
     

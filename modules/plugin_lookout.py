@@ -1,6 +1,22 @@
 
 #!/usr/bin/env python
 # coding: utf8
+
+#    This file is part of plugin_lookout.
+
+#    Plugin_lookout is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+
+#    Plugin_lookout is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with Nome-Programma.  If not, see <http://www.gnu.org/licenses/>.
+
 from gluon import *
 
 from dal import regex_python_keywords
@@ -9,7 +25,7 @@ import re
 
 class IS_VALID_SQL_TABLE_NAME(Validator):
     '''
-    Checks if the field's value is a valid SQL table name.
+    Checks if the field value is a valid SQL table name.
     
     Arguments:
     
@@ -27,18 +43,18 @@ class IS_VALID_SQL_TABLE_NAME(Validator):
     Examples:
     
         #Check if text string is a good sql table name:
-        INPUT(_type='text', _name='name', requires=IS_VALID_SQL_TABLE_NAME(db))
+        INPUT(_type="text", _name="name", requires=IS_VALID_SQL_TABLE_NAME(db))
         
         #Check if text string is a good sql table name specific for postgres dialect:
-        INPUT(_type='text', _name='name', requires=IS_VALID_SQL_TABLE_NAME(db, check_reserved=('postgres', )))
+        INPUT(_type="text", _name="name", requires=IS_VALID_SQL_TABLE_NAME(db, check_reserved=("postgres", )))
         
-        >>> IS_VALID_SQL_TABLE_NAME(db)('')
+        >>> IS_VALID_SQL_TABLE_NAME(db)("")
         ('', 'invalid table name: ')
-        >>> IS_VALID_SQL_TABLE_NAME(db)('foo')
+        >>> IS_VALID_SQL_TABLE_NAME(db)("foo")
         ('foo', None)
-        >>> IS_VALID_SQL_TABLE_NAME(db)('test')
+        >>> IS_VALID_SQL_TABLE_NAME(db)("test")
         ('test', 'table/attribute name already defined: test')
-        >>> IS_VALID_SQL_TABLE_NAME(db)('select')
+        >>> IS_VALID_SQL_TABLE_NAME(db)("select")
         ('select', 'invalid table/column name "select" is a "COMMON" reserved SQL keyword')
     
     '''
