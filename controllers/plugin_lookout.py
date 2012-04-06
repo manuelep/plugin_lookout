@@ -14,10 +14,9 @@
 #    GNU General Public License for more details.
 
 #    You should have received a copy of the GNU General Public License
-#    along with Nome-Programma.  If not, see <http://www.gnu.org/licenses/>.
+#    along with Plugin_lookout.  If not, see <http://www.gnu.org/licenses/>.
 
-# prova qualcosa come
-def index(): return dict(message="hello from plugin_lookout.py")
+def index(): return dict()
 
 #        # condizione: esiste tabella con lo stesso nome in una connessione con stesso alias
 #        alias = db(db.plugin_lookout_connections.id==form.vars.connection)\
@@ -30,7 +29,9 @@ def index(): return dict(message="hello from plugin_lookout.py")
 #            set_table_restrictions(res.first())
 #            db.commit()
 
-def conn_onvalidation(form):
+################################################### PLUGIN_LOOKOUT_CONNECTIONS #
+
+def connection_onvalidation(form):
     '''
     The callback function for the connections form
     '''
@@ -44,87 +45,111 @@ def conn_onvalidation(form):
     
     res = db(db.plugin_lookout_connections.dsn==form.vars.dsn).select()
 
-    if res:
-        form.vars.alias = res.first().alias
+    if len(res)>0:
+        rec = res.first()
+        form.vars.alias = rec.alias
         group_id = auth.user_group(auth.user_id)
 
         if not auth.has_permission(table_name='plugin_lookout_connections',
             user_id=auth.user_id,
-            record_id=res.first().id
+            record_id=rec.id
         ):
             auth.add_permission(table_name='plugin_lookout_connections',
-                group_id=group_id, record_id=res.first().id)
+                group_id=group_id, record_id=rec.id)
 
-#        for row in res:
-#            if not auth.has_permission(table_name='plugin_lookout_tables', user_id=auth.user_id, record_id=row.id):
-#                auth.add_permission(table_name='plugin_lookout_tables', group_id=group_id, record_id=row.id)
-
-        db_hash = globals()[form.vars.alias]
+        db_hash = globals()[form.vars.alias]._uri_hash
         groups = db(db.auth_group.role.contains(db_hash)).select(db.auth_group.id)
         for group in groups:
             if not auth.has_membership(group.id, auth.user_id):
                 auth.add_membership(group.id, auth.user_id)
 
-def get_data_with_permissions(table_name):
-    ids = db((db.auth_permission.table_name==table_name)\
-        &(~db.auth_permission.group_id.belongs(auth.user_groups.keys())))\
-        ._select(db.auth_permission.record_id)
+def connection_oncreate(form):
+    set_data_permission('plugin_lookout_connections', form.vars.id)
 
-    return (~db[table_name].id.belongs(ids))
 
 @auth.requires_login()
 def plugin_lookout_connections():
     db.plugin_lookout_connections.dsn.represent = lambda v, r: '%s: %s' % (r.alias, v.replace('%s', '<password>'))
     
     form = SQLFORM.smartgrid(db.plugin_lookout_connections,
-        onvalidation = conn_onvalidation,
+        onvalidation = connection_onvalidation,
         linked_tables = [],
-        constraints = dict(plugin_lookout_connections=get_data_with_permissions('plugin_lookout_connections'))
+        constraints = dict(plugin_lookout_connections=get_connection_set())
     )
-    set_ownership('plugin_lookout_connections')
+    
+    return dict(form=form)
 
-#    res_conn = db(db.plugin_lookout_connections).select()
-#    dbs = dict([(x.alias, globals()[x.alias].tables) for x in res_conn])
+######################################################## PLUGIN_LOOKOUT_TABLES #
 
-    return dict(form=form) #, dbs=dbs)
-
-def tab_onvalidation(form):
+def table_onvalidate(form):
     '''
     The callback function for the tables form
     '''
-    # on create
+    # before creation
     from plugin_lookout import db_got_table
     if 'new' in request.args:
-        db_alias = db(db.plugin_lookout_connections.id==form.vars.connection).select(db.plugin_lookout_connections.alias).first().alias
-        mydb = globals()[db_alias]
+        connection_name = db.plugin_lookout_connections[form.vars.connection_id].alias
+        mydb = globals()[connection_name]
         tab_in_sqldb, msg = db_got_table(mydb, form.vars.table_name)
         
         if tab_in_sqldb:
             form.vars.table_migrate = False
         else:
             form.vars.table_migrate = True
-        form.errors.table_name = IS_VALID_SQL_TABLE_NAME(
-            globals()[db(db.plugin_lookout_connections.id==request.vars.connection)\
-                .select(db.plugin_lookout_connections.alias).first().alias],
-            check_reserved=('common', 'postgres', )
+
+        form.errors.table_name = IS_VALID_SQL_TABLE_NAME(mydb,
+            check_reserved = ('common', 'postgres', )
         )(form.vars.table_name)[1]
+    
+    # before deletion
+    if form.vars.delete_this_record=='on':
+#        join = db.plugin_lookout_tables.connection_id==db.plugin_lookout_connections.id
+        where = db.plugin_lookout_tables.id==form.vars.id
+        rec_table = db(where).select(
+            db.plugin_lookout_tables.table_migrate,
+            db.plugin_lookout_tables.is_view,
+            db.plugin_lookout_tables.connection_name
+        ).first()
+        table_migrate = rec_table.migrate
+        table_is_view = rec_table.is_view
+        connection_name = rec_table.connection_name
         
-        t_hash = '%s_%s' % (globals()[db_alias]._uri_hash, form.vars.table_name)
-        if form.vars.restricted:
-            r_role = 'read_%s' % t_hash
-            r_group_id = db.auth_group.update_or_insert(role=r_role)
-            if not r_group_id:
-                r_group_id = db(db.auth_group.role==r_role).select().first().id
-            if not auth.has_membership(r_group_id, auth.user_id):
-                auth.add_membership(r_group_id, auth.user_id)
+        key = '%s_%s' % (globals()[connection_name]._uri_hash, form.vars.table_name)
+        db(db.auth_group.role.contains(key)).delete()
+        
+        for row in db(db.plugin_lookout_fields.tables.contains(form.vars.id)).select():
+            ids = row.tables
+            ids.remove(int(form.vars.id))
+            row.update_record(tables=ids)
             
-            w_role = 'write_%s' % t_hash
-            w_group_id = db.auth_group.update_or_insert(role=w_role)
-            if not w_group_id:
-                w_group_id = db(db.auth_group.role==w_role).select().first().id
-            if not auth.has_membership(w_group_id, auth.user_id):
-                auth.add_membership(w_group_id, auth.user_id)
+        if not table_migrate and table_is_view:
+            db.executesql('DROP VIEW %s CASCADE;' % tab.table_name)
+        elif table_migrate:
+            try:
+                globals()[connection.alias][form.vars.table_name].drop()
+            except Exception, error:
+                msg = T('Table %s not removed: %s') % (form.vars.table_name, str(error))
+                session.flash = msg
+                # this will block record deletion
+                form.errors.external_error = str(msg)
         
+def table_oncreate(form):
+    if 'connection_id' in form.vars:
+        connection_name = db.plugin_lookout_connections[form.vars.connection_id].alias
+    else:
+        connection_name = db.plugin_lookout_tables[form.vars.id].connection_name
+    if form.vars.restricted:
+        t_hash = '%s_%s' % (globals()[connection_name]._uri_hash, form.vars.table_name)
+        w_role = 'write_%s' % t_hash
+        r_role = 'read_%s' % t_hash
+        set_data_permission('plugin_lookout_tables', form.vars.id, role=r_role)
+        set_data_permission('plugin_lookout_tables', form.vars.id, role=w_role)
+        
+def table_ondelete():
+    unusefull_fields_set = db(db.plugin_lookout_fields.tables==[])
+    if unusefull_fields_set.count() > 0:
+        unusefull_fields_set.delete()
+      
 @auth.requires_login()
 def plugin_lookout_tables():
     '''
@@ -132,90 +157,75 @@ def plugin_lookout_tables():
     * aggiungi campo a tabella
     * rimuovi campo dalla tabella
     '''
+    from random import randint
+    
     if 'edit' in request.args:
         db.plugin_lookout_tables.table_name.writable = False
-        db.plugin_lookout_tables.connection.writable = False
-    db.plugin_lookout_tables.table_name.represent = lambda val,row: A(row.table_name, _href=URL('plugin_lookout_external_tables', vars=dict(id=row.id)))
+        db.plugin_lookout_tables.connection_id.writable = False
+
+    only_view = bool(request.vars.only_view)
+    session.plugin_lookout_tables_only_view = only_view
+    if 'edit' in request.vars:
+        editable = auth.has_permission('plugin_lookout_tables', request.args(0), auth.user_id)
+    else:
+        editable = not session.plugin_lookout_tables_only_view
+
+    table_set = get_table_set(view_only=bool(only_view))
+
+    db.plugin_lookout_tables.table_name.represent = lambda val,row: A(row.table_name, _href=URL('plugin_lookout_external_tables', vars=dict(table_id=row.id)))
+    db.plugin_lookout_tables.connection_id.represent = lambda val,row: ('%(dsn)s' % db.plugin_lookout_connections[val]).replace('%s', randint(8, 16)*'*')
     form = SQLFORM.smartgrid(db.plugin_lookout_tables,
-        onvalidation=tab_onvalidation,
-        deletable=False,
-        linked_tables=[],
-        constraints = dict(plugin_lookout_tables=get_data_with_permissions('plugin_lookout_tables'))
+        onvalidation = table_onvalidate,
+        oncreate = table_oncreate,
+        onupdate = table_oncreate,
+        ondelete = table_ondelete,
+        deletable = ('edit' in request.args),
+        editable = editable,
+        linked_tables = [],
+        constraints = dict(plugin_lookout_tables=table_set) # get_data_with_permissions('plugin_lookout_tables')
     )
-    set_ownership('plugin_lookout_tables')
+    
+    if 'view' in request.args:
+        table_id = request.args[-1]
+        if db((db.auth_permission.table_name=='plugin_lookout_tables')\
+            &(db.auth_permission.record_id==table_id)).count():
+            my_extra_element = FORM(INPUT(_type="submit", _value=T('Share data')), _action=URL('share_data_with_users', args=table_id))
+            form.components.insert(-1,my_extra_element)
+    
     return dict(form=form)
 
+######################################################## PLUGIN_LOOKOUT_FIELDS #
 
-@auth.requires_login()
-def plugin_lookout_table_remove():
-    '''
-    Controller for removing configured tables
-    '''
-    message = T('This controller is for table deletion. Warning! Only active table can be deleted.')
-    form = SQLFORM.factory(
-        Field('table_id',
-            label=T('Table name'),
-            comment=T('Choose the table to delete.'),
-            requires=IS_IN_DB(db((db.plugin_lookout_tables.is_active==True)&get_data_with_permissions('plugin_lookout_tables')),
-                'plugin_lookout_tables.id', '%(table_name)s')
-            )
-    )
-
-    if form.accepts(request, session, formname='form_one'):
-        tab = db(db.plugin_lookout_tables.id==form.vars.table_id).select().first()
-        
-        key = '%s_%s' % (globals()[tab.connection.alias]._uri_hash, tab.table_name)
-        db(db.auth_group.role.contains(key)).delete()
-        
-        for row in db(db.plugin_lookout_fields.tables.contains(form.vars.table_id)).select():
-            ids = row.tables
-            ids.remove(int(form.vars.table_id))
-            row.update_record(tables=ids)
-        
-        if tab.table_migrate:
-            try:
-                globals()[tab.connection.alias][tab.table_name].drop()
-            except Exception, error:
-                session.flash = T('Table not removed: %s') % str(error)
-            else:
-                db(db.plugin_lookout_tables.id==form.vars.table_id).delete()
-        elif tab.is_view:
-            db.executesql('DROP VIEW %s CASCADE;' % tab.table_name)
-            db(db.plugin_lookout_tables.id==form.vars.table_id).delete()
-        else:
-            db(db.plugin_lookout_tables.id==form.vars.table_id).delete()
-
-        unusefull_fields_set = db(db.plugin_lookout_fields.tables==[])
-        if unusefull_fields_set.count() > 0:
-            unusefull_fields_set.delete()
-        redirect(URL('plugin_lookout_tables'))
-
-    if request.extension == 'load':
-        return dict(form=form)
-    else:
-        return dict(form=form, message=message)
-
-
-db.plugin_lookout_fields.tables.represent = lambda id,row: CAT(*[CAT(A('%s ' %i.table_name,
-    _href = URL('plugin_lookout_tables',
-        args = ['plugin_lookout_tables', 'view','plugin_lookout_tables', i.id],
-        user_signature = True)), BR()
-    ) for i in db(db.plugin_lookout_tables.id.belongs(id))\
-        .select(db.plugin_lookout_tables.id, db.plugin_lookout_tables.table_name)])
+#db.plugin_lookout_fields.table.represent = lambda id,row: CAT(*[CAT(A('%s ' %i.table_name,
+#    _href = URL('plugin_lookout_tables',
+#        args = ['plugin_lookout_tables', 'view','plugin_lookout_tables', i.id],
+#        user_signature = True)), BR()
+#    ) for i in db(db.plugin_lookout_tables.id.belongs(id))\
+#        .select(db.plugin_lookout_tables.id, db.plugin_lookout_tables.table_name)])
 
 @auth.requires_login()
 def plugin_lookout_fields():
-    form = SQLFORM.smartgrid(db.plugin_lookout_fields, linked_tables=['plugin_lookout_tables'], editable=False, deletable=False)
+    db.plugin_lookout_fields.table_id.requires = IS_IN_DB(db(get_table_set(view_only=False)), db.plugin_lookout_tables.id, '%(table_name)s')
+    db.plugin_lookout_fields.table_id.represent = lambda value, row: db.plugin_lookout_tables[value].table_name
+    form = SQLFORM.smartgrid(db.plugin_lookout_fields,
+        linked_tables=['plugin_lookout_tables'],
+        orderby = db.plugin_lookout_fields.table_id,
+#        editable=False,
+#        deletable=False,
+        constraints = dict(plugin_lookout_fields=(db.plugin_lookout_fields\
+            .table_id.belongs(db(get_table_set(view_only=False))._select(db.plugin_lookout_tables.id))))
+    )
     return locals()
 
+####################################################################### TABLES #
 
-@auth.requires(get_table_restriction(request.vars.id or session.plugin_lookout_external_tables_id, action='r'), requires_login=True)
+@auth.requires(control_permission(request.vars.table_id or session.plugin_lookout_external_tables_id, reading=True), requires_login=True)
 def plugin_lookout_external_tables():
     '''
     Controller for manage data inside table that are not part of the model
     '''
     message = 'Here you can see the date inside the tables you have configured'
-    table_id = request.vars.id or session.plugin_lookout_external_tables_id or redirect(URL('plugin_lookout_tables'))
+    table_id = request.vars.table_id or session.plugin_lookout_external_tables_id or redirect(URL('plugin_lookout_tables'))
     session.plugin_lookout_external_tables_id = table_id
 #    table_id = int(request.args(0)) or redirect(URL('plugin_lookout_tables'))
     
@@ -226,15 +236,69 @@ def plugin_lookout_external_tables():
         redirect(URL('plugin_lookout_tables'))
     
     rec_table = db(db.plugin_lookout_tables.id==table_id).select().first()
-    mydb = globals()[rec_table.connection.alias]
+    mydb = globals()[rec_table.connection_name]
     if rec_table.table_name not in mydb.tables:
         session.flash = T('Table "%s" is not recognized from db model. maybe it\'s not active') % rec_table.table_name
         session.flash = 'La tabella "%s" non riconosciuta in database o non attiva.' % rec_table.table_name
         redirect(URL('plugin_lookout_tables'))
     
-    writable=get_table_restriction(table_id, action='w')
+    writable=control_permission(table_id, reading=False)
     grid=SQLFORM.smartgrid(mydb[rec_table.table_name], deletable=writable, editable=writable, create=writable)
     if request.extension == 'load':
         return dict(grid=grid)
     else:
         return dict(grid=grid, message=message)
+
+################################################################### SHARE DATA #
+
+def group_representation(value, row):
+    rec_group = db.auth_group[value]
+    representation = rec_group.role
+    import ipdb; ipdb.set_trace()
+    if rec_group.role[:5] == 'user_':
+        user_id = int(rec_group.role.split('_')[1])
+        rec_user = db.auth_user[user_id]
+        representation += ': %(first_name)s %(last_name)s'
+        return representation % rec_user
+    else:
+        return representation
+
+@auth.requires_login()
+def share_data_with_users():
+    table_id = request.args(0) or redirect(URL('plugin_lookout_tables'))
+#    join = (db.auth_membership.group_id==db.auth_group.id)\
+#        &(db.auth_membership.user_id==db.auth_user.id)
+    form = SQLFORM.factory(
+        Field('groups', 'list:reference auth_group',
+            requires=IS_IN_DB(db, 'auth_group.id', '%(role)s', multiple=True),
+        ),
+        Field('read_only', 'boolean')
+    )
+    if form.accepts(request, session):
+        rec_table = db.plugin_lookout_tables[table_id]
+        tab_db = globals()[rec_table.connection_name]
+        t_hash = '%s_%s' % (tab_db._uri_hash, rec_table.table_name)
+        if form.vars.read_only:
+            role = 'read_%s' % t_hash
+        else:
+            role = 'write_%s' % t_hash
+        
+        for group_id in form.vars.groups:
+            set_data_permission('plugin_lookout_tables', table_id, role=role, group_id=group_id)
+    
+    
+#        groups = db(db.auth_user.id.belongs(form.vars.groups)).select()
+#        join = db.plugin_lookout_tables.connection==db.plugin_lookout_connections.id
+#        rec_table = db(join&(db.plugin_lookout_tables.id==table_id)).select(
+#            db.plugin_lookout_tables.table_name,
+#            db.plugin_lookout_connections.alias
+#        ).first()
+#        table = globals()[rec_table.plugin_lookout_connections.alias][rec_table.plugin_lookout_tables.table_name]
+#        share_data(table, read_only=form.vars.read_only, users=users)
+    return dict(form=form)
+    
+    
+    
+    
+    
+    

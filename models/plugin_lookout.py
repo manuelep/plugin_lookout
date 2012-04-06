@@ -14,7 +14,7 @@
 #    GNU General Public License for more details.
 
 #    You should have received a copy of the GNU General Public License
-#    along with Nome-Programma.  If not, see <http://www.gnu.org/licenses/>.
+#    along with Plugin_lookout.  If not, see <http://www.gnu.org/licenses/>.
 
 from gluon.custom_import import track_changes; track_changes(True)
 from plugin_lookout import IS_VALID_SQL_TABLE_NAME
@@ -32,19 +32,17 @@ connessioni private ma gestite in modo da non creare doppioni di oggetti
 '''
 
 ################################################################## CONNECTIONS #
-from random import randint
+
 db.define_table('plugin_lookout_connections',
-    Field('alias', readable=False, required=True, writable=False),
-    Field('dsn'), #  requires=IS_EXPR('value.count("%s")==1')
+    Field('alias', readable=False, required=True, notnull=True, writable=False),
+    Field('dsn', required=True),
     Field('pwd', 'password', readable=False),
     Field('is_active', 'boolean', default=True),
-#    Field('is_shared', 'boolean', default=False),
     auth.signature.created_by,
-    format = '%(alias)s' # lambda r: r.dsn.replace('%s', randint(8,16)*'*')
+    format = '%(dsn)s' #lambda r: ('%(alias)s %(dsn)s' % r).replace('%s', randint(8, 16*'*'))
 )
 
 db.plugin_lookout_connections.alias.requires = IS_NOT_IN_DB(db, 'plugin_lookout_connections.alias')
-#db.plugin_lookout_connections.dsn.requires = IS_NOT_IN_DB(db, 'plugin_lookout_connections.dsn')
 f_max = db.plugin_lookout_connections.id.max()
 id_max = db().select(f_max).first()[f_max] or 0
 db.plugin_lookout_connections.alias.default = 'db_%s' % (int(id_max) + 1)
@@ -70,14 +68,6 @@ for k,v in define_dbs().items():
 
 ####################################################################### TABLES #
 
-#def wich_db(r):
-#    if r.connection:
-#        mydb = globals()[db(db.plugin_lookout_connections.id==r.vars.connection)\
-#            .select(db.plugin_lookout_connections.alias).first().alias]
-#        return mydb
-#    else:
-#        return db
-
 db.define_table('plugin_lookout_tables',
     Field('table_name', label=T('Table name'), required=True,
         ondelete='CASCADE'
@@ -87,11 +77,12 @@ db.define_table('plugin_lookout_tables',
     Field('table_singular', label=T('Singular')),
     Field('table_plural', label=T('Plural')),
     Field('restricted', 'boolean', default=False),
-    Field('connection', db.plugin_lookout_connections, required=True,
-        requires = IS_IN_DB(db(db.plugin_lookout_connections.created_by==auth.user_id), 'plugin_lookout_connections.id', '%(dsn)s')
-    ),
     Field('is_active', 'boolean', default=True, label=T('Active'), comment=T('Let the table be recognized from db?')),
     Field('is_view', 'boolean', label=T('View'), default=False, writable=False, readable=False),
+    Field('connection_id', db.plugin_lookout_connections, required=True,
+        requires = IS_IN_DB(db(db.plugin_lookout_connections.created_by==auth.user_id), 'plugin_lookout_connections.id', )
+    ),
+    Field('connection_name', compute=lambda row: db.plugin_lookout_connections[row['connection_id']].alias),
     auth.signature.created_by,
     format='%(tab_name)s',
     singular="Tabella", plural="Tabelle"
@@ -113,14 +104,14 @@ field_types = [('string', 'String'),
     ('geography', 'Geography')]
 
 db.define_table('plugin_lookout_fields',
-    Field('tables', 'list:reference db.plugin_lookout_tables', label=T('Table name'),
-        required=True, requires=IS_IN_DB(db, 'plugin_lookout_tables.id', '%(table_name)s', multiple=True)),
+    Field('table_id', db.plugin_lookout_tables, label=T('Table name'),
+        required=True, requires=IS_IN_DB(db, 'plugin_lookout_tables.id', '%(table_name)s')),
     Field('field_name', label=T('Field name'), required=True,
         requires=IS_MATCH('^[a-z0-9_]*$', error_message='Nome campo non valido.')),
     Field('field_type', label=T('Field type'), comment=T('default: "string"'),
         requires=IS_EMPTY_OR(IS_IN_SET(field_types))),
     Field('field_format', length=25, label=T('Format'),
-        comment = T('Date/time format (Optional. Only for date and datetime field type)')),
+        comment = T('Date/time format (Optional. Only for date and datetime field types)')),
 #            'Formato data/ora (es: "%H:%M:%S - %d/%m/%Y"). \
 #            Utile SOLO nei casi di dato un formato date, datetime o time. \
 #            Attenzione! Se la tabella esiste in database il formato deve \
@@ -131,14 +122,6 @@ db.define_table('plugin_lookout_fields',
     Field('field_comment', label=T('Comment'))
 )
 
-#def setup_permission(grop_id, name, table_name):
-#    where = (db.auth_permission.group_id==group_id)\
-#        &(db.auth_permission.name==name)\
-#        &(db.auth_permission.tab_name==table_name)
-#    res = db(where).select()
-#    if not res:
-#        auth.add_permission(group_id, name, table_name)
-
 def define_tables(fake_migrate=False):
     try:
         import ppygis
@@ -147,10 +130,10 @@ def define_tables(fake_migrate=False):
     else:
         geom_representation = lambda value: str(ppygis.Geometry.read_ewkb(value))
 
-    join = db.plugin_lookout_tables.connection == db.plugin_lookout_connections.id
+    join = db.plugin_lookout_tables.connection_id == db.plugin_lookout_connections.id
     where = (db.plugin_lookout_tables.is_active==True)&(db.plugin_lookout_connections.is_active==True)
     res_tables = db(join&where).select(db.plugin_lookout_connections.ALL, db.plugin_lookout_tables.ALL)
-    res_fields = db(db.plugin_lookout_fields).select(orderby=db.plugin_lookout_fields.tables)
+    res_fields = db(db.plugin_lookout_fields).select(orderby=db.plugin_lookout_fields.table_id)
 
     translate = dict(
         field_type = 'type',
@@ -168,7 +151,7 @@ def define_tables(fake_migrate=False):
     for rec_table in res_tables:
         field_list = list()
         geoms = dict(geometry=[], geography=[])
-        for rec_field in res_fields.find(lambda row: rec_table.plugin_lookout_tables.id in row.tables):
+        for rec_field in res_fields.find(lambda row: rec_table.plugin_lookout_tables.id == row.table_id):
 
             # DUCK DEBUG
             #+ n_r_f: Not Required Fields. Ovvero campi non obbligatori
@@ -186,7 +169,6 @@ def define_tables(fake_migrate=False):
             field_list.append(Field(rec_field.field_name, **kwargs))
 
         mydb = globals()[rec_table.plugin_lookout_connections.alias]
-#        import ipdb; ipdb.set_trace()
         table = mydb.Table(mydb, rec_table.plugin_lookout_tables.table_name, *field_list)
 
         if not hasattr(mydb, rec_table.plugin_lookout_tables.table_name.lower()):
@@ -206,57 +188,119 @@ def define_tables(fake_migrate=False):
 
 define_tables()
 
-def get_table_restriction(table_id, action='w'):
-    rec_table = db(db.plugin_lookout_tables.id==table_id).select().first()
-    if rec_table:
-        t_hash = '%s_%s' % (globals()[rec_table.connection.alias]._uri_hash, rec_table.table_name)
+
+######################################################################## UTILS #
+
+def control_permission(table_id, reading=False):
+    rec_table = db.plugin_lookout_tables[table_id]
+#    import ipdb; ipdb.set_trace()
+    if not rec_table: return False
+    
+    if not rec_table.restricted:
+        return True
     else:
-        return False
-    if rec_table.restricted:
-        if action=='w':
-            role = 'write_%s' % t_hash
-        elif action=='r':
+        t_hash = '%s_%s' % (globals()[rec_table.connection_name]._uri_hash, rec_table.table_name)
+        if reading:
             role = 'read_%s' % t_hash
         else:
-            return False
-        return auth.has_membership(user_id=auth.user_id, role=role)
+            role = 'write_%s' % t_hash
+        return auth.has_permission(role, 'plugin_lookout_tables', table_id, auth.user_id)
+
+def set_data_permission(table_name, record_id, role='any', group_id=None):
+    '''
+    roles: read_<db._uri_hash>_<table_name> 
+           write_<db._uri_hash>_<table_name> 
+    '''
+    db.auth_permission.update_or_insert(
+        group_id = group_id or auth.id_group('user_%s' % auth.user_id),
+        name = role,
+        table_name = table_name,
+        record_id = record_id
+    )
+
+    
+
+def get_table_set(view_only=True):
+    '''deve restituire il set dei record delle tabelle registrate:
+    .1. view_only=True:
+        condivise in lettura,
+        non ristrette
+        
+    .2. view_only=False
+        condivise in scrittura
+        non ristrette
+    '''
+    
+    base_condition = db.auth_permission.table_name=='plugin_lookout_tables'
+    
+    owner_condition = db.auth_permission.group_id.belongs(auth.user_groups.keys())
+    owner_query = db(base_condition&owner_condition)._select(db.auth_permission.record_id)
+    
+    # non ristrette
+    others_query = db(base_condition&~owner_condition)._select(db.auth_permission.record_id)
+    not_restricted_cond = ~db.plugin_lookout_tables.id.belongs(others_query)
+    
+    # condivise in lettura
+    reading_permission_condition = db.auth_permission.name.contains('read_')
+    r_q = db(base_condition&owner_condition&reading_permission_condition)._select(db.auth_permission.record_id)
+    shared_for_reading_condition = db.plugin_lookout_tables.id.belongs(r_q)
+    
+    # condivise in scrittura    
+    wrinting_permission_condition = db.auth_permission.name.contains('write_')
+    w_q = db(base_condition&owner_condition&wrinting_permission_condition)._select(db.auth_permission.record_id)
+    shared_for_writing_condition = db.plugin_lookout_tables.id.belongs(w_q)
+
+    if view_only:
+        return not_restricted_cond|shared_for_reading_condition
     else:
-        return True
+        return not_restricted_cond|shared_for_writing_condition
+    
+def get_connection_set():
+    ids = db((db.auth_permission.table_name=='plugin_lookout_connections')\
+        &(~db.auth_permission.group_id.belongs(auth.user_groups.keys())))\
+        ._select(db.auth_permission.record_id)
+    return (~db.plugin_lookout_connections.id.belongs(ids))
 
-def set_ownership(table_name):
-    for row in db(db[table_name]).select():
-        owner = row.created_by
-        for irow in db(db[table_name].created_by==owner)\
-            .select():
-            restricted = irow.get('restricted')
-            if restricted == None: restricted = True
-            if restricted:
-                if not auth.has_permission(table_name=table_name,
-                    user_id=owner,
-                    record_id=irow.id):
-                    group_id = db(db.auth_group.role=='user_%s' % owner)\
-                        .select(db.auth_group.id).first().id
-                    auth.add_permission(table_name=table_name,
-                        group_id=group_id,
-                        record_id=irow.id)
-                        
-#set_ownership('plugin_lookout_connections')
-#set_ownership('plugin_lookout_tables')
+#def set_ownership(table_name, **kwargs):
+#    if not auth.has_permission(table_name=kwargs['table_name'],
+#        user_id = auth.user_id,
+#        record_id = kwargs['id']):
+#        group_id = db(db.auth_group.role=='user_%s' % auth.user_id)\
+#            .select(db.auth_group.id).first().id
+#        auth.add_permission(table_name=table_name,
+#            group_id=group_id,
+#            record_id=kwargs['id'])
 
+def share_data(table, read_only=True, users=None):
+    from gluon.dal import Row
+    if not users:
+        users = [auth.user]
+    elif isinstance(users, Row):
+        users = [users]
+    t_hash = '%s_%s' % (table._db._uri_hash, table._tablename)
+    if read_only:
+        key = 'read_%s' % t_hash
+    else:
+        key = t_hash
+    groups = db(db.auth_group.role.contains(key)).select(db.auth_group.id)
+    for group in groups:
+        for user in users:
+            if not auth.has_membership(group.id, user.id):
+                auth.add_membership(group.id, user.id)
 
-def clean_permission():
-    for table_name in ('plugin_lookout_connections', 'plugin_lookout_tables', ):
-        ids = db(db[table_name])._select(db[table_name].id)
-        db((db.auth_permission.table_name==table_name)&(~db.auth_permission.record_id.belongs(ids))).delete()
-clean_permission()
+def share_data_with_groups(table, groups, read_only=True):
+    from gluon.dal import Row
+    if isinstance(groups, Row):
+        groups = [groups]
+    
 
-
+######################################################################### MENU #
 
 response.menu+=[
-    (T('plugin lookout'), False, '', [
+    (T('plugin lookout'), False, URL('plugin_lookout','index'), [
         (T('Connections'), False, URL('plugin_lookout','plugin_lookout_connections')),
+        (T('Browse tables'), False, URL('plugin_lookout','plugin_lookout_tables', vars=dict(only_view=True))),
         (T('Add/Edit tables'), False, URL('plugin_lookout','plugin_lookout_tables')),
-        (T('Remove tables'), False, URL('plugin_lookout','plugin_lookout_table_remove')),
-        (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields')),
+        (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields'))
     ]),
 ]
