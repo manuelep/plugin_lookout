@@ -33,6 +33,8 @@ connessioni private ma gestite in modo da non creare doppioni di oggetti
 
 ################################################################## CONNECTIONS #
 
+from random import randint
+
 db.define_table('plugin_lookout_connections',
     Field('alias', readable=False, required=True, notnull=True, writable=False),
     Field('dsn', required=True),
@@ -46,6 +48,7 @@ db.plugin_lookout_connections.alias.requires = IS_NOT_IN_DB(db, 'plugin_lookout_
 f_max = db.plugin_lookout_connections.id.max()
 id_max = db().select(f_max).first()[f_max] or 0
 db.plugin_lookout_connections.alias.default = 'db_%s' % (int(id_max) + 1)
+db.plugin_lookout_connections.dsn.represent = lambda v, r: '%s: %s' % (r.alias, v.replace('%s', randint(8, 16)*'*'))
 
 def define_dbs():
     plugin_lookout_dbs = Storage()
@@ -80,11 +83,11 @@ db.define_table('plugin_lookout_tables',
     Field('is_active', 'boolean', default=True, label=T('Active'), comment=T('Let the table be recognized from db?')),
     Field('is_view', 'boolean', label=T('View'), default=False, writable=False, readable=False),
     Field('connection_id', db.plugin_lookout_connections, required=True,
-        requires = IS_IN_DB(db(db.plugin_lookout_connections.created_by==auth.user_id), 'plugin_lookout_connections.id', )
+        requires = IS_IN_DB(db(db.plugin_lookout_connections.created_by==auth.user_id), 'plugin_lookout_connections.id', '%(alias)s: %(dsn)s')
     ),
     Field('connection_name', compute=lambda row: db.plugin_lookout_connections[row['connection_id']].alias),
     auth.signature.created_by,
-    format='%(tab_name)s',
+    format='%(table_name)s',
     singular="Tabella", plural="Tabelle"
 )
 #db.plugin_lookout_tables.table_name.requires = IS_VALID_SQL_TABLE_NAME(wich_db(request), check_reserved=('common', 'postgres', ))
@@ -182,19 +185,26 @@ def define_tables(fake_migrate=False):
             if rec_table.plugin_lookout_tables.table_migrate:
                 for k,v in geoms.items():
                     for i in v:
-                        r = mydb.executesql("select data_type from information_schema.columns where table_name='%s' AND column_name='%s'" % (rec_table.plugin_lookout_tables.tab_name, i))
+                        r = mydb.executesql("select data_type from information_schema.columns where table_name='%s' AND column_name='%s'" % (rec_table.plugin_lookout_tables.table_name, i))
                         if r[0][0] != 'text':
-                            mydb.executesql('ALTER TABLE %s ALTER COLUMN %s TYPE %s;' % (t.tab_name, i, k))
+                            mydb.executesql('ALTER TABLE %s ALTER COLUMN %s TYPE %s;' % (t.table_name, i, k))
 
 define_tables()
 
-
 ######################################################################## UTILS #
 
-def control_permission(table_id, reading=False):
+import os
+uploadfolder=os.path.join(request.folder,'uploads/')
+
+db.define_table('plugin_lookout_datafiles',
+    Field('file_name', 'upload', uploadfolder=uploadfolder, autodelete=True),
+    Field('table_id', 'reference plugin_lookout_tables', writable=False, readable=False, unique=True, notnull=True)
+)
+
+def control_permission(table_id, reading=False, default=False):
     rec_table = db.plugin_lookout_tables[table_id]
 #    import ipdb; ipdb.set_trace()
-    if not rec_table: return False
+    if not rec_table: return default
     
     if not rec_table.restricted:
         return True
@@ -218,8 +228,6 @@ def set_data_permission(table_name, record_id, role='any', group_id=None):
         record_id = record_id
     )
 
-    
-
 def get_table_set(view_only=True):
     '''deve restituire il set dei record delle tabelle registrate:
     .1. view_only=True:
@@ -236,16 +244,16 @@ def get_table_set(view_only=True):
     owner_condition = db.auth_permission.group_id.belongs(auth.user_groups.keys())
     owner_query = db(base_condition&owner_condition)._select(db.auth_permission.record_id)
     
-    # non ristrette
+    # not restricted table set
     others_query = db(base_condition&~owner_condition)._select(db.auth_permission.record_id)
     not_restricted_cond = ~db.plugin_lookout_tables.id.belongs(others_query)
     
-    # condivise in lettura
+    # shared table for reading
     reading_permission_condition = db.auth_permission.name.contains('read_')
     r_q = db(base_condition&owner_condition&reading_permission_condition)._select(db.auth_permission.record_id)
     shared_for_reading_condition = db.plugin_lookout_tables.id.belongs(r_q)
     
-    # condivise in scrittura    
+    # shared table for writing
     wrinting_permission_condition = db.auth_permission.name.contains('write_')
     w_q = db(base_condition&owner_condition&wrinting_permission_condition)._select(db.auth_permission.record_id)
     shared_for_writing_condition = db.plugin_lookout_tables.id.belongs(w_q)
@@ -260,16 +268,6 @@ def get_connection_set():
         &(~db.auth_permission.group_id.belongs(auth.user_groups.keys())))\
         ._select(db.auth_permission.record_id)
     return (~db.plugin_lookout_connections.id.belongs(ids))
-
-#def set_ownership(table_name, **kwargs):
-#    if not auth.has_permission(table_name=kwargs['table_name'],
-#        user_id = auth.user_id,
-#        record_id = kwargs['id']):
-#        group_id = db(db.auth_group.role=='user_%s' % auth.user_id)\
-#            .select(db.auth_group.id).first().id
-#        auth.add_permission(table_name=table_name,
-#            group_id=group_id,
-#            record_id=kwargs['id'])
 
 def share_data(table, read_only=True, users=None):
     from gluon.dal import Row
@@ -288,12 +286,6 @@ def share_data(table, read_only=True, users=None):
             if not auth.has_membership(group.id, user.id):
                 auth.add_membership(group.id, user.id)
 
-def share_data_with_groups(table, groups, read_only=True):
-    from gluon.dal import Row
-    if isinstance(groups, Row):
-        groups = [groups]
-    
-
 ######################################################################### MENU #
 
 response.menu+=[
@@ -301,6 +293,7 @@ response.menu+=[
         (T('Connections'), False, URL('plugin_lookout','plugin_lookout_connections')),
         (T('Browse tables'), False, URL('plugin_lookout','plugin_lookout_tables', vars=dict(only_view=True))),
         (T('Add/Edit tables'), False, URL('plugin_lookout','plugin_lookout_tables')),
-        (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields'))
+        (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields')),
+        (T('Import xlsx file'), False, URL('plugin_lookout','import_xls', args=['new']))
     ]),
 ]

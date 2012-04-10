@@ -105,3 +105,12 @@ def db_got_table(db, table):
     else:
         answare = True
     return answare, msg
+
+def guess_type(values):
+    types = map(type, values)
+    if float in types:
+        return 'double'
+    elif int in types:
+        return 'integer'
+    else:
+        return None
