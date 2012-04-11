@@ -294,6 +294,6 @@ response.menu+=[
         (T('Browse tables'), False, URL('plugin_lookout','plugin_lookout_tables', vars=dict(only_view=True))),
         (T('Add/Edit tables'), False, URL('plugin_lookout','plugin_lookout_tables')),
         (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields')),
-        (T('Import xlsx file'), False, URL('plugin_lookout','import_xls', args=['new']))
+        (T('Import table structure from xls'), False, URL('plugin_lookout','import_xls_structure', args=['new']))
     ]),
 ]

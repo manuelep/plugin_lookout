@@ -159,6 +159,7 @@ def table_ondelete():
 @auth.requires_login()
 def plugin_lookout_tables():
     '''
+    Controller for managing table features and settings.
     funzioni da aggiungere:
     * aggiungi campo a tabella
     * rimuovi campo dalla tabella
@@ -218,6 +219,9 @@ def plugin_lookout_tables():
 
 @auth.requires(control_permission(request.vars.table_id, reading=False, default=True), requires_login=True)
 def plugin_lookout_fields():
+    '''
+    Controller for managing field features and settings.
+    '''
 
     table_condition = get_table_set(view_only=False)
     db.plugin_lookout_fields.table_id.requires = IS_IN_DB(db(get_table_set(view_only=False)), db.plugin_lookout_tables.id, '%(table_name)s')
@@ -237,7 +241,8 @@ def plugin_lookout_fields():
 @auth.requires(control_permission(request.vars.table_id or session.plugin_lookout_external_tables_id, reading=True), requires_login=True)
 def plugin_lookout_external_tables():
     '''
-    Controller for manage data inside table that are not part of the model
+    Controller for manage data inside table that are not part of the model.
+    It is called from the linked table name in the plugin_lookout_tables edit grid.
     '''
     message = 'Here you can see the date inside the tables you have configured'
 
@@ -280,6 +285,10 @@ def group_representation(value, row):
 
 @auth.requires_login()
 def share_data_with_users():
+    '''
+    This controller is for choose the user groups that you want to share your
+    data with. It is called from the plugin_lookout_tables edit grid context menu.
+    '''
     table_id = request.args(0) or redirect(URL('plugin_lookout_tables'))
 #    join = (db.auth_membership.group_id==db.auth_group.id)\
 #        &(db.auth_membership.user_id==db.auth_user.id)
@@ -319,53 +328,20 @@ from openpyxl.reader.excel import load_workbook
 from plugin_lookout import guess_type
 
 @auth.requires_login()
-def import_xls_data():
-
-    table_id = request.vars.table_id or redirect(URL('plugin_lookout_tables'))
-    form = SQLFORM.factory(
-        Field('source_file', 'upload', uploadfolder=uploadfolder)
-    )
-    if form.accepts(request, session):
-        filePath = os.path.join(uploadfolder, form.vars.source_file)
-        xlsx = load_workbook(filePath)
-        first_sheet_name = xlsx.get_sheet_names()[0]
-        sheet = xlsx.get_sheet_by_name(first_sheet_name)
-        pass
-
-    return dict()
-
-#@auth.requires_login()
-#def import_csv_upload_file():
-#    '''
-#    dict = {"<head>": dict(
-#        field_name = <>,
-#        field_type = <>,
-#    )}
-#    '''
-#    
-#    form = SQLFORM.factory(
-#        db.plugin_lookout_tables,
-#        Field('csv_file', 'upload', uploadfolder=uploadfolder)
-#    )
-#    if form.accepts(request, session):
-#        path = os.path.join(uploadfolder, form.vars.csv_file)
-#        new_tab_record = dict([(i, form.vars[i]) for i in form.vars if i in db.plugin_lookout_tables.fields])        
-
-#    return dict(form=form)
-
-#def csv_import_customize_field():
-#    
-#    return dict()
-#    
-    
-@auth.requires_login()
-def import_xls():
+def import_xls_structure():
     '''
     This controller is for build a table structure for containing data from an
-    excell spread sheet. It creates ad many fields as the number of the columns
+    excell spread sheet. It creates as many fields as the number of the columns
     if finds in the first sheet of the xls file and try to guess the type of
     data to contain for each field. The table structure is created not active so
     you can made some change before to import data.
+    After the table creation you'll be redirected to the field managment
+    controller filtered on the fields of the newly created table.
+    It is called from the plugin_lookout_tables edit grid context menu.
+    
+    TODO: In the future all sheets of the xls file can be supported and more
+    than one table structure can be created in one time. Maybe could be asked to
+    the user how many fields to import (0 for all sheets)
     '''
 
     db.plugin_lookout_tables.is_active.default = False
@@ -418,6 +394,13 @@ def import_xls():
 
 @auth.requires_login()
 def init_xls_data():
+    '''
+    Once a table structure is builded starting from an uploaded xls file, once
+    you've verified that all data type correnspond to the data you're bound to
+    upload than you can use this controller to upload data from the same file
+    stored in data base. I this way the new table can be resetted to the starting
+    condition whenever you need. The stored file can be considered as a data backup.
+    '''
     table_id = request.vars.table_id or redirect(URL('plugin_lookout_tables'))
     
     table_info = db.plugin_lookout_tables[table_id]
@@ -436,6 +419,9 @@ def init_xls_data():
     field_names = [i.field_name for i in res_fields]
     
     mydb = globals()[table_info.connection_name]
+    
+    if mydb(mydb[table_info.table_name]).count(): mydb[table_info.table_name].drop()
+    
     error = None
     for row in sheet.rows[1:]:
         values = [cell.value for cell in row]
