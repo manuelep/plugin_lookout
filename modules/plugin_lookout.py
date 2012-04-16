@@ -19,6 +19,8 @@
 
 from gluon import *
 
+from gluon.custom_import import track_changes; track_changes(True)
+
 from dal import regex_python_keywords
 from validators import Validator, translate
 import re
@@ -91,17 +93,14 @@ def db_got_table(db, table):
     db: the database connection where to look for
     table: the table name to look for
     '''
-    db_type = db._uri[:8]
+#    db_type = db._uri[:8]
     msg = ''
     sql_src = "SELECT 1 FROM %s WHERE 1=2" % table
     try:
         db.executesql(sql_src)
-    except db._adapter.driver.OperationalError, error:
-        msg = str(error)
-        if msg == 'no such table: %s' % table:
-            answare = False
-        else:
-            raise db._adapter.driver.OperationalError(msg)
+    except Exception, error:
+        msg = str(error).split('\n')[0].strip()
+        answare = False
     else:
         answare = True
     return answare, msg
@@ -114,3 +113,206 @@ def guess_type(values):
         return 'integer'
     else:
         return None
+
+
+def geom_representation(value, n=7):
+    if not value: return value
+    try:
+        import ppygis
+    except:
+        return value[:n]
+    else:
+        return str(ppygis.Geometry.read_ewkb(value))[:n]
+
+from openpyxl.reader.excel import load_workbook
+from archive import extract
+import ogr, os
+def file2struct(fileName, path, table_id, plugin_lookout_fields):
+    fileExt = fileName.split('.')[-1]
+    filePath = os.path.join(path, fileName)
+    if fileExt in ('xls', 'xlsx', ):
+        xlsx = load_workbook(filePath)
+        first_sheet_name = xlsx.get_sheet_names()[0]
+        sheet = xlsx.get_sheet_by_name(first_sheet_name)
+        header = sheet.rows[0]
+
+        for idx, cell in enumerate(header):
+            values = [i.value for i in sheet.columns[idx]][1:]
+            
+            field_type = guess_type(values)
+            
+            ret = plugin_lookout_fields.validate_and_insert(
+                table_id = table_id,
+                field_name = cell.value.lower().replace(' ', ''),
+                field_comment = cell.value,
+                field_type = field_type
+            )
+            if ret.get('error'):
+                plugin_lookout_fields.insert(
+                    table_id = table_id,
+                    field_name = 'field_%s' % idx,
+                    field_label = cell.value,
+                    field_comment = str(ret.error),
+                    field_type = field_type
+                )
+    elif fileExt in ('zip', 'egg', 'jar', 'tar', 'gz', 'tgz', 'bz2', 'tz2', ):
+        
+        # uncompress the archive in new_dir
+        new_dir = '.'.join(fileName.split('.')[:-1])
+        new_path = os.path.join(path, new_dir)
+        try:
+            os.mkdir(new_path)
+        except OSError, error:
+            pass
+        else:
+            if fileExt in ('gz', 'bz2', ):
+                filePath_new = '.'.join(filePath.split('.')[:-1] + ['tar', fileExt])
+                os.rename(filePath, filePath_new)
+                filePath = filePath_new
+            extract(filePath, new_path)
+
+        main_shp = [i for i in os.listdir(new_path) if i.split('.')[-1]=='shp'][0]
+        shp_path = os.path.join(new_path, main_shp)
+        
+        driver = ogr.GetDriverByName('ESRI Shapefile')
+        source = driver.Open(shp_path, 0)
+        layer = source.GetLayer()
+
+        # inspect field names and types
+        ESRITypes = dict(String='string', Real='double', Date='date')
+        layer_defn = layer.GetLayerDefn()
+        layer_infos = [(layer_defn.GetFieldDefn(i).GetName(),
+            ESRITypes[layer_defn.GetFieldDefn(i).GetTypeName()]) for i in xrange(layer_defn.GetFieldCount())]
+        
+        # setup geometry field
+        ret = plugin_lookout_fields.validate_and_insert(
+                table_id = table_id,
+                field_name = 'the_geom',
+                field_label = 'Geometric feature',
+                field_type = 'geometry'
+            )
+        if ret.errors:
+            raise Exception(str(ret.errors))
+        
+        # setup attributes fields
+        for field_name, field_type in layer_infos:
+            ret = plugin_lookout_fields.validate_and_insert(
+                table_id = table_id,
+                field_name = field_name.lower(),
+                field_label = field_name,
+                field_type = field_type
+            )
+            if ret.errors:
+                raise Exception(str(ret.errors))
+
+def initFromFile(fileName, path, table_id, db, ext_table):
+    filePath = os.path.join(path, fileName)
+    fileExt = fileName.split('.')[-1]
+    if fileExt in ('xls', 'xlsx', ):
+        xlsx = load_workbook(filePath)
+        first_sheet_name = xlsx.get_sheet_names()[0]
+        sheet = xlsx.get_sheet_by_name(first_sheet_name)
+        
+        if ext_table._db(ext_table).count(): ext_table.drop()
+        
+        error = None
+        for index,row in enumerate(sheet.rows[1:]):
+            values = [cell.value for cell in row]
+            fields = [r.field_name for r in db(db.plugin_lookout_fields.table_id==table_id).select(db.plugin_lookout_fields.field_name)]
+            
+            kwargs = dict([(k,v) for k,v in zip(fields, values)])
+            ret = ext_table.validate_and_insert(**kwargs)
+            if ret.errors:
+                error = dict([(k, (kwargs[k], ret.errors[k])) for k in ret.errors])
+                raise Exception(str(error))
+
+    elif fileExt in ('zip', 'egg', 'jar', 'tar', 'gz', 'tgz', 'bz2', 'tz2', ):
+        # uncompress the archive in new_dir
+        new_dir = '.'.join(fileName.split('.')[:-1])
+        new_path = os.path.join(path, new_dir)
+        try:
+            os.mkdir(new_path)
+        except OSError, error:
+            pass
+        else:
+            if fileExt in ('gz', 'bz2', ):
+                filePath_new = '.'.join(filePath.split('.')[:-1] + ['tar', fileExt])
+                os.rename(filePath, filePath_new)
+                filePath = filePath_new
+            extract(filePath, new_path)
+
+        main_shp = [i for i in os.listdir(new_path) if i.split('.')[-1]=='shp'][0]
+        shp_path = os.path.join(new_path, main_shp)
+        
+        driver = ogr.GetDriverByName('ESRI Shapefile')
+        source = driver.Open(shp_path, 0)
+        layer = source.GetLayer()
+        
+        # inspect field names and types
+        ESRITypes = dict(String='string', Real='double', Date='date')
+        layer_defn = layer.GetLayerDefn()
+        layer_infos = [(layer_defn.GetFieldDefn(i).GetName(),
+            ESRITypes[layer_defn.GetFieldDefn(i).GetTypeName()]) for i in xrange(layer_defn.GetFieldCount())]
+        
+        for index in xrange(layer.GetFeatureCount()):
+            feature = layer.GetFeature(index)
+            kwargs = dict([(fn[0].lower(), feature.GetField(fn[0])) for fn in layer_infos if feature.GetField(fn[0]) not in (None, '', '0000/00/00', )])
+            if not hasattr(ext_table['the_geom'], 'st_asgeojson'):
+                kwargs['the_geom'] = feature.GetGeometryRef().ExportToWkt() # tested with postgis and web2py 1.99.7
+            else:
+                kwargs['the_geom'] = feature.GetGeometryRef().ExportToWkb() # to be tested with web2py trunk with gis support
+            
+            ret = ext_table.validate_and_insert(**kwargs)
+            if ret.errors:
+                error = dict([(k, (kwargs[k], ret.errors[k])) for k in ret.errors])
+                raise IOError(str(error))
+
+#import ogr
+#def get_layer(shp_path):
+#    driver = ogr.GetDriverByName('ESRI Shapefile')
+#    source = driver.Open(shp_path, 0)
+#    return source.GetLayer()
+
+#def get_layer_infos(layer):
+#    '''
+#    layer: OGR Layer object
+#    layer_infos = [(<layer_name>, <layer_type>)]
+#    '''
+#    ESRITypes = dict(String='string', Real='double', Date='date')
+#    layer_defn = layer.GetLayerDefn()
+#    layer_infos = [(layer_defn.GetFieldDefn(i).GetName(),
+#        ESRITypes[layer_defn.GetFieldDefn(i).GetTypeName()]) for i in xrange(layer_defn.GetFieldCount())]
+#    return layer_infos
+
+#def upload_layer(layer, table):
+#    ids = []
+#    layer_infos = get_layer_infos(layer)
+#    for index in xrange(layer.GetFeatureCount()):
+#        feature = layer.GetFeature(index)
+#        kwargs = dict([(fn[0], feature.GetField(fn[0])) for fn in layer_infos])
+#        if not hasattr(table['the_geom'], 'st_asgeojson'):
+#            kwargs['the_geom'] = feature.GetGeometryRef().ExportToWkb()
+#        else:
+#            kwargs['the_geom'] = feature.GetGeometryRef().ExportToWkt()
+#        
+#        ret = table.validate_and_insert(**kwargs)
+#        
+#        if ret.errors:
+#            raise IOError(str(ret.errors))
+#        else:
+#            ids.append = ret.id
+#    return tuple(ids)
+            
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        

@@ -71,12 +71,14 @@ for k,v in define_dbs().items():
 
 ####################################################################### TABLES #
 
+from plugin_lookout import db_got_table
+
 db.define_table('plugin_lookout_tables',
     Field('table_name', label=T('Table name'), required=True,
         ondelete='CASCADE'
     ),
-    Field('table_migrate', 'boolean', default=False, readable=False, writable=False,
-        label='Migrate', comment=T('Create the table?')),
+    Field('table_migrate', 'boolean',
+        compute = lambda row: not db_got_table(globals()[db.plugin_lookout_connections[row['connection_id']].alias], row['table_name'])[0]),
     Field('table_singular', label=T('Singular')),
     Field('table_plural', label=T('Plural')),
     Field('restricted', 'boolean', default=False),
@@ -125,13 +127,9 @@ db.define_table('plugin_lookout_fields',
     Field('field_comment', label=T('Comment'))
 )
 
+
+from plugin_lookout import geom_representation
 def define_tables(fake_migrate=False):
-    try:
-        import ppygis
-    except:
-        geom_representation = lambda value: value
-    else:
-        geom_representation = lambda value: str(ppygis.Geometry.read_ewkb(value))
 
     join = db.plugin_lookout_tables.connection_id == db.plugin_lookout_connections.id
     where = (db.plugin_lookout_tables.is_active==True)&(db.plugin_lookout_connections.is_active==True)
@@ -148,7 +146,8 @@ def define_tables(fake_migrate=False):
     validators = dict(
         date = IS_DATE,
         datetime = IS_DATETIME,
-        time = IS_TIME
+        time = IS_TIME,
+        text = IS_LENGTH(65536)
     )
 
     for rec_table in res_tables:
@@ -167,8 +166,9 @@ def define_tables(fake_migrate=False):
                 if not hasattr(Field, 'st_asgeojson'):
                     geoms[rec_field.field_type].append(rec_field.field_name)
                     kwargs['type'] = 'text'
+                    kwargs['requires'] = IS_EMPTY_OR(validators.get('text'))
                     kwargs['writable'] = False # if unsupported geometryes are managed as visible only text record
-                    kwargs['represent'] = lambda value,row: '%s ...' % geom_representation(value)[:50]
+                    kwargs['represent'] = lambda value,row: '%s ...' % geom_representation(value)
             field_list.append(Field(rec_field.field_name, **kwargs))
 
         mydb = globals()[rec_table.plugin_lookout_connections.alias]
@@ -186,8 +186,8 @@ def define_tables(fake_migrate=False):
                 for k,v in geoms.items():
                     for i in v:
                         r = mydb.executesql("select data_type from information_schema.columns where table_name='%s' AND column_name='%s'" % (rec_table.plugin_lookout_tables.table_name, i))
-                        if r[0][0] != 'text':
-                            mydb.executesql('ALTER TABLE %s ALTER COLUMN %s TYPE %s;' % (t.table_name, i, k))
+                        if r[0][0] == 'text':
+                            mydb.executesql('ALTER TABLE %s ALTER COLUMN %s TYPE %s;' % (rec_table.plugin_lookout_tables.table_name, i, k))
 
 define_tables()
 
@@ -196,8 +196,12 @@ define_tables()
 import os
 uploadfolder=os.path.join(request.folder,'uploads/')
 
+plugin_lookout_datafiles_types = ['xlsx', 'zip', 'egg', 'jar', 'tar', 'gz', 'tgz', 'bz2', 'tz2']
 db.define_table('plugin_lookout_datafiles',
     Field('file_name', 'upload', uploadfolder=uploadfolder, autodelete=True),
+    Field('extension', compute=lambda r: r['file_name'].split('.')[-1], 
+        requires = IS_IN_SET(plugin_lookout_datafiles_types)
+    ),
     Field('table_id', 'reference plugin_lookout_tables', writable=False, readable=False, unique=True, notnull=True)
 )
 
@@ -292,8 +296,9 @@ response.menu+=[
     (T('plugin lookout'), False, URL('plugin_lookout','index'), [
         (T('Connections'), False, URL('plugin_lookout','plugin_lookout_connections')),
         (T('Browse tables'), False, URL('plugin_lookout','plugin_lookout_tables', vars=dict(only_view=True))),
-        (T('Add/Edit tables'), False, URL('plugin_lookout','plugin_lookout_tables')),
+        (T('Add/Edit/Remove tables'), False, URL('plugin_lookout','plugin_lookout_tables')),
         (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields')),
-        (T('Import table structure from xls'), False, URL('plugin_lookout','import_xls_structure', args=['new']))
+        (T('Import table structure from xls'), False, URL('plugin_lookout','import_struct', args=['new'])),
+        (T('Import ESRI shape file'), False, URL('plugin_lookout','import_shp')),
     ]),
 ]
