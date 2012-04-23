@@ -41,6 +41,7 @@ db.define_table('plugin_lookout_connections',
     Field('pwd', 'password', readable=False),
     Field('is_active', 'boolean', default=True),
     auth.signature.created_by,
+    singular=T('DB connection'), plural=T('DB connections'),
     format = '%(dsn)s' #lambda r: ('%(alias)s %(dsn)s' % r).replace('%s', randint(8, 16*'*'))
 )
 
@@ -78,19 +79,21 @@ db.define_table('plugin_lookout_tables',
         ondelete='CASCADE'
     ),
     Field('table_migrate', 'boolean',
-        compute = lambda row: not db_got_table(globals()[db.plugin_lookout_connections[row['connection_id']].alias], row['table_name'])[0]),
+        compute = lambda row: not (db_got_table(globals()[db\
+            .plugin_lookout_connections[row['connection_id']]\
+                .alias], row['table_name'])[0] or row['is_view'])),
     Field('table_singular', label=T('Singular')),
     Field('table_plural', label=T('Plural')),
     Field('restricted', 'boolean', default=False),
     Field('is_active', 'boolean', default=True, label=T('Active'), comment=T('Let the table be recognized from db?')),
-    Field('is_view', 'boolean', label=T('View'), default=False, writable=False, readable=False),
+    Field('is_view', 'boolean', label=T('View'), default=False, writable=False, readable=True),
     Field('connection_id', db.plugin_lookout_connections, required=True,
         requires = IS_IN_DB(db(db.plugin_lookout_connections.created_by==auth.user_id), 'plugin_lookout_connections.id', '%(alias)s: %(dsn)s')
     ),
     Field('connection_name', compute=lambda row: db.plugin_lookout_connections[row['connection_id']].alias),
     auth.signature.created_by,
-    format='%(table_name)s',
-    singular="Tabella", plural="Tabelle"
+    singular=T('Table'), plural=T('Tables'),
+    format='%(table_name)s'
 )
 #db.plugin_lookout_tables.table_name.requires = IS_VALID_SQL_TABLE_NAME(wich_db(request), check_reserved=('common', 'postgres', ))
 
@@ -111,11 +114,11 @@ field_types = [('string', 'String'),
 db.define_table('plugin_lookout_fields',
     Field('table_id', db.plugin_lookout_tables, label=T('Table name'),
         required=True, requires=IS_IN_DB(db, 'plugin_lookout_tables.id', '%(table_name)s')),
-    Field('field_name', label=T('Field name'), required=True,
-        requires=IS_MATCH('^[a-z0-9_]*$', error_message='Nome campo non valido.')),
+    Field('field_name', label=T('Field name'), required=True),
     Field('field_type', label=T('Field type'), comment=T('default: "string"'),
         requires=IS_EMPTY_OR(IS_IN_SET(field_types))),
     Field('field_format', length=25, label=T('Format'),
+        requires = IS_EMPTY_OR(IS_LENGTH()),
         comment = T('Date/time format (Optional. Only for date and datetime field types)')),
 #            'Formato data/ora (es: "%H:%M:%S - %d/%m/%Y"). \
 #            Utile SOLO nei casi di dato un formato date, datetime o time. \
@@ -123,10 +126,15 @@ db.define_table('plugin_lookout_fields',
 #            rispettare quello in uso. Verificare nei dati esistenti.'),
     Field('field_length', 'integer', label=T('Length'),
         comment=T('Field lenght')),
-    Field('field_label', label=T('Label')),
-    Field('field_comment', label=T('Comment'))
+    Field('field_label', label=T('Label'), requires = IS_EMPTY_OR(IS_LENGTH())),
+    Field('field_comment', label=T('Comment'), requires = IS_EMPTY_OR(IS_LENGTH())),
+    Field('is_active', 'boolean', default=True, label=T('Active')),
+    singular=T('Table field'), plural=T('Table fields'),
 )
 
+# in order to prevent field name duplication inside the same table
+db.plugin_lookout_fields.field_name.requires = IS_NOT_IN_DB(db(db.plugin_lookout_fields.table_id==request.vars.table_id), 'plugin_lookout_fields.field_name')
+#    IS_MATCH('^[a-z0-9_]*$', error_message='Nome campo non valido.')]
 
 from plugin_lookout import geom_representation
 def define_tables(fake_migrate=False):
@@ -153,7 +161,11 @@ def define_tables(fake_migrate=False):
     for rec_table in res_tables:
         field_list = list()
         geoms = dict(geometry=[], geography=[])
-        for rec_field in res_fields.find(lambda row: rec_table.plugin_lookout_tables.id == row.table_id):
+        if rec_table.plugin_lookout_tables.table_migrate:
+            filter_function = lambda row: row.table_id == rec_table.plugin_lookout_tables.id
+        else:
+            filter_function = lambda row: row.table_id == rec_table.plugin_lookout_tables.id and row.is_active!=False
+        for rec_field in res_fields.find(filter_function):
 
             # DUCK DEBUG
             #+ n_r_f: Not Required Fields. Ovvero campi non obbligatori
@@ -182,6 +194,7 @@ def define_tables(fake_migrate=False):
                 *field_list,
                 **t_kwargs
             )
+            # Only compatible with POSTGIS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             if rec_table.plugin_lookout_tables.table_migrate:
                 for k,v in geoms.items():
                     for i in v:
@@ -293,12 +306,12 @@ def share_data(table, read_only=True, users=None):
 ######################################################################### MENU #
 
 response.menu+=[
-    (T('plugin lookout'), False, URL('plugin_lookout','index'), [
+    (T('Your data'), False, URL('plugin_lookout','index'), [
         (T('Connections'), False, URL('plugin_lookout','plugin_lookout_connections')),
         (T('Browse tables'), False, URL('plugin_lookout','plugin_lookout_tables', vars=dict(only_view=True))),
         (T('Add/Edit/Remove tables'), False, URL('plugin_lookout','plugin_lookout_tables')),
         (T('Manage fields'), False, URL('plugin_lookout','plugin_lookout_fields')),
-        (T('Import table structure from xls'), False, URL('plugin_lookout','import_struct', args=['new'])),
-        (T('Import ESRI shape file'), False, URL('plugin_lookout','import_shp')),
+        (T('Create table from file (only structure)'), False, URL('plugin_lookout','import_struct', args=['new']))
+#        (T('Import ESRI shape file'), False, URL('plugin_lookout','import_shp')),
     ]),
 ]

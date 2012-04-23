@@ -223,6 +223,7 @@ def initFromFile(fileName, path, table_id, db, ext_table):
             kwargs = dict([(k,v) for k,v in zip(fields, values)])
             ret = ext_table.validate_and_insert(**kwargs)
             if ret.errors:
+                db.rollback()
                 error = dict([(k, (kwargs[k], ret.errors[k])) for k in ret.errors])
                 raise Exception(str(error))
 
@@ -303,9 +304,19 @@ def initFromFile(fileName, path, table_id, db, ext_table):
 #            ids.append = ret.id
 #    return tuple(ids)
             
+
+from gluon import dal
+def querysum(*args):
+    db = args[0]._db
+    args1 = args[len(args)%2:]
+    r = map(db._adapter.AND, args1[::2], args1[1::2])
+    while len(r) > 1:
+        r = querysum(*r)
+    if len(args)%2:
+        r = map(db._adapter.AND, r, args[:len(args)%2])
+    return dal.Query(db, *r)   
         
-        
-        
+
         
         
         

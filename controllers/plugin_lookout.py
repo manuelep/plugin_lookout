@@ -82,6 +82,8 @@ def plugin_lookout_connections():
 
 ######################################################## PLUGIN_LOOKOUT_TABLES #
 
+from plugin_lookout import IS_VALID_SQL_TABLE_NAME
+
 def table_onvalidate(form):
     '''
     The callback function for the tables form
@@ -130,7 +132,10 @@ def table_onvalidate(form):
 #            row.update_record(tables=ids)
             
         if not table_migrate and table_is_view:
-            db.executesql('DROP VIEW %s CASCADE;' % table_name)
+            try:
+                mydb.executesql('DROP VIEW %s;' % table_name)
+            except Exception, error:
+                session.flash = str(error)
         elif table_migrate and table_is_active:
             try:
                 globals()[connection_name][table_name].drop()
@@ -328,124 +333,124 @@ def share_data_with_users():
 
 ################################################################### XLS IMPORT #
 
-from openpyxl.reader.excel import load_workbook
-from plugin_lookout import guess_type
+#from openpyxl.reader.excel import load_workbook
+#from plugin_lookout import guess_type
 
-@auth.requires_login()
-def import_xls_structure():
-    '''
-    This controller is for building a table structure and contain data from an
-    excell spread sheet. It creates as many fields as the number of the columns
-    if finds in the first sheet of the xls file and try to guess the type of
-    data to contain for each field. The table structure is created not active so
-    you can made some change before to import data.
-    After the table creation you'll be redirected to the field managment
-    controller filtered on the fields of the newly created table.
-    It is called from the plugin_lookout_tables edit grid context menu.
-    
-    TODO: In the future all sheets of the xls file can be supported and more
-    than one table structure can be created in one time. Maybe could be asked to
-    the user how many fields to import (0 for all sheets)
-    '''
+#@auth.requires_login()
+#def import_xls_structure():
+#    '''
+#    This controller is for building a table structure and contain data from an
+#    excell spread sheet. It creates as many fields as the number of the columns
+#    if finds in the first sheet of the xls file and try to guess the type of
+#    data to contain for each field. The table structure is created not active so
+#    you can made some change before to import data.
+#    After the table creation you'll be redirected to the field managment
+#    controller filtered on the fields of the newly created table.
+#    It is called from the plugin_lookout_tables edit grid context menu.
+#    
+#    TODO: In the future all sheets of the xls file can be supported and more
+#    than one table structure can be created in one time. Maybe could be asked to
+#    the user how many fields to import (0 for all sheets)
+#    '''
 
-    db.plugin_lookout_tables.is_active.default = False
-    db.plugin_lookout_tables.is_active.writable = False
-    if not 'new' in request.args: redirect(URL('plugin_lookout_tables'))
+#    db.plugin_lookout_tables.is_active.default = False
+#    db.plugin_lookout_tables.is_active.writable = False
+#    if not 'new' in request.args: redirect(URL('plugin_lookout_tables'))
 
-    db.plugin_lookout_datafiles.extension.requires = plugin_lookout_datafiles_types[1:2]
-    form = SQLFORM.factory(
-        db.plugin_lookout_tables,
-        db.plugin_lookout_datafiles
-#        Field('source_file', 'upload', uploadfolder=uploadfolder)
-    )
+#    db.plugin_lookout_datafiles.extension.requires = plugin_lookout_datafiles_types[1:2]
+#    form = SQLFORM.factory(
+#        db.plugin_lookout_tables,
+#        db.plugin_lookout_datafiles
+##        Field('source_file', 'upload', uploadfolder=uploadfolder)
+#    )
 
-    if form.accepts(request, session, onvalidation=table_onvalidate):
-    
-        table_id = db.plugin_lookout_tables.insert(**db.plugin_lookout_tables._filter_fields(form.vars))
-        form.vars.table_id=table_id
-        file_id = db.plugin_lookout_datafiles.insert(**db.plugin_lookout_datafiles._filter_fields(form.vars))
-    
-        filePath = os.path.join(uploadfolder, db.plugin_lookout_datafiles[file_id].file_name)
-        
-        xlsx = load_workbook(filePath)
-        first_sheet_name = xlsx.get_sheet_names()[0]
-        sheet = xlsx.get_sheet_by_name(first_sheet_name)
-        header = sheet.rows[0]
+#    if form.accepts(request, session, onvalidation=table_onvalidate):
+#    
+#        table_id = db.plugin_lookout_tables.insert(**db.plugin_lookout_tables._filter_fields(form.vars))
+#        form.vars.table_id=table_id
+#        file_id = db.plugin_lookout_datafiles.insert(**db.plugin_lookout_datafiles._filter_fields(form.vars))
+#    
+#        filePath = os.path.join(uploadfolder, db.plugin_lookout_datafiles[file_id].file_name)
+#        
+#        xlsx = load_workbook(filePath)
+#        first_sheet_name = xlsx.get_sheet_names()[0]
+#        sheet = xlsx.get_sheet_by_name(first_sheet_name)
+#        header = sheet.rows[0]
 
-        for idx, cell in enumerate(header):
-            values = [i.value for i in sheet.columns[idx]][1:]
-            
-            field_type = guess_type(values)
-            
-            ret = db.plugin_lookout_fields.validate_and_insert(
-                table_id = table_id,
-                field_name = cell.value.lower().replace(' ', ''),
-                field_comment = cell.value,
-                field_type = field_type
-            )
-            if ret.get('error'):
-                db.plugin_lookout_fields.insert(
-                    table_id = table_id,
-                    field_name = 'field_%s' % idx,
-                    field_label = cell.value,
-                    field_comment = str(ret.error),
-                    field_type = field_type
-                )
-        xlsx.close()
-        redirect(URL('plugin_lookout_fields',
-                vars=dict(keywords='plugin_lookout_fields.table_id="%s"' % table_id)))
-    
-    return dict(form=form)
+#        for idx, cell in enumerate(header):
+#            values = [i.value for i in sheet.columns[idx]][1:]
+#            
+#            field_type = guess_type(values)
+#            
+#            ret = db.plugin_lookout_fields.validate_and_insert(
+#                table_id = table_id,
+#                field_name = cell.value.lower().replace(' ', ''),
+#                field_comment = cell.value,
+#                field_type = field_type
+#            )
+#            if ret.get('error'):
+#                db.plugin_lookout_fields.insert(
+#                    table_id = table_id,
+#                    field_name = 'field_%s' % idx,
+#                    field_label = cell.value,
+#                    field_comment = str(ret.error),
+#                    field_type = field_type
+#                )
+#        xlsx.close()
+#        redirect(URL('plugin_lookout_fields',
+#                vars=dict(keywords='plugin_lookout_fields.table_id="%s"' % table_id)))
+#    
+#    return dict(form=form)
 
-@auth.requires_login()
-def init_xls_data():
-    '''
-    Once a table structure is builded starting from an uploaded xls file, once
-    you've verified that all data type correnspond to the data you're bound to
-    upload than you can use this controller to upload data from the same file
-    stored in data base. I this way the new table can be resetted to the starting
-    condition whenever you need. The stored file can be considered as a data backup.
-    '''
-    table_id = request.vars.table_id or redirect(URL('plugin_lookout_tables'))
-    
-    table_info = db.plugin_lookout_tables[table_id]
-    
-    if not table_info.is_active:
-        session.flash = T('You cannot populate not active tables')
-        redirect(URL('plugin_lookout_tables', args=['plugin_lookout_tables', 'edit', 'plugin_lookout_tables', table_id]))
-    
-    filePath = os.path.join(uploadfolder, db.plugin_lookout_datafiles[table_id].file_name)
-    xlsx = load_workbook(filePath)
-    first_sheet_name = xlsx.get_sheet_names()[0]
-    sheet = xlsx.get_sheet_by_name(first_sheet_name)
-    
-    res_fields = db(db.plugin_lookout_fields.table_id==table_id).select(db.plugin_lookout_fields.field_name)
-    
-    field_names = [i.field_name for i in res_fields]
-    
-    mydb = globals()[table_info.connection_name]
-    
-    if mydb(mydb[table_info.table_name]).count(): mydb[table_info.table_name].drop()
-    
-    error = None
-    for row in sheet.rows[1:]:
-        values = [cell.value for cell in row]
-        
-        kwargs = dict([(k,v) for k,v in zip(field_names, values)])
-        ret = mydb[table_info.table_name].validate_and_insert(**kwargs)
-        if ret.errors:
-            error = T('Import error in line %(line)s, column %(key)s: %(value)s (%(data)s)', dict(line=n, data=data, **ret.errors))
-            mydb.rollback()
-            break
-    
-    if error:
-        session.flash = error
-        redirect(URL('plugin_lookout_tables'))
-    
-    redirect(URL('plugin_lookout_external_tables', vars=dict(table_id=table_id)))
+#@auth.requires_login()
+#def init_xls_data():
+#    '''
+#    Once a table structure is builded starting from an uploaded xls file, once
+#    you've verified that all data type correnspond to the data you're bound to
+#    upload than you can use this controller to upload data from the same file
+#    stored in data base. I this way the new table can be resetted to the starting
+#    condition whenever you need. The stored file can be considered as a data backup.
+#    '''
+#    table_id = request.vars.table_id or redirect(URL('plugin_lookout_tables'))
+#    
+#    table_info = db.plugin_lookout_tables[table_id]
+#    
+#    if not table_info.is_active:
+#        session.flash = T('You cannot populate not active tables')
+#        redirect(URL('plugin_lookout_tables', args=['plugin_lookout_tables', 'edit', 'plugin_lookout_tables', table_id]))
+#    
+#    filePath = os.path.join(uploadfolder, db.plugin_lookout_datafiles[table_id].file_name)
+#    xlsx = load_workbook(filePath)
+#    first_sheet_name = xlsx.get_sheet_names()[0]
+#    sheet = xlsx.get_sheet_by_name(first_sheet_name)
+#    
+#    res_fields = db(db.plugin_lookout_fields.table_id==table_id).select(db.plugin_lookout_fields.field_name)
+#    
+#    field_names = [i.field_name for i in res_fields]
+#    
+#    mydb = globals()[table_info.connection_name]
+#    
+#    if mydb(mydb[table_info.table_name]).count(): mydb[table_info.table_name].drop()
+#    
+#    error = None
+#    for row in sheet.rows[1:]:
+#        values = [cell.value for cell in row]
+#        
+#        kwargs = dict([(k,v) for k,v in zip(field_names, values)])
+#        ret = mydb[table_info.table_name].validate_and_insert(**kwargs)
+#        if ret.errors:
+#            error = T('Import error in line %(line)s, column %(key)s: %(value)s (%(data)s)', dict(line=n, data=data, **ret.errors))
+#            mydb.rollback()
+#            break
+#    
+#    if error:
+#        session.flash = error
+#        redirect(URL('plugin_lookout_tables'))
+#    
+#    redirect(URL('plugin_lookout_external_tables', vars=dict(table_id=table_id)))
 
 
-################################################################# IMPORT SHAPE #
+######################################################## IMPORT DATA FROM FILE #
 
 from plugin_lookout import file2struct
 
@@ -465,7 +470,7 @@ def import_struct():
         file_id = db.plugin_lookout_datafiles.insert(**db.plugin_lookout_datafiles._filter_fields(form.vars))
         file_path = os.path.join(uploadfolder, db.plugin_lookout_datafiles[file_id].file_name)
         file_name = db.plugin_lookout_datafiles[file_id].file_name
-        fileExt = fileName.split('.')[-1]
+#        fileExt = file_name.split('.')[-1]
         
         file2struct(file_name, uploadfolder, table_id, db.plugin_lookout_fields)
         
@@ -487,218 +492,172 @@ def init_external_table():
         redirect(URL('plugin_lookout_tables', args=['plugin_lookout_tables', 'edit', 'plugin_lookout_tables', table_id]))
     
     ext_table = globals()[table_info.connection_name][table_info.table_name]
-    
-    initFromFile(db(db.plugin_lookout_datafiles.table_id==table_id).select().first().file_name, uploadfolder, table_id, db, ext_table)
-    
-    redirect(URL('plugin_lookout_external_tables', vars=dict(table_id=table_id)))
-    
-    
-
-
-
-
-
-
-
-
-
-
-#@auth.requires_login()
-#def import_shp():
-#    '''
-#    '''
-#    from archive import extract
-#    import ogr, shutil
-#    db.plugin_lookout_tables.is_active.default = True
-#    db.plugin_lookout_tables.is_active.writable = False
-##    if not 'new' in request.args: redirect(URL('plugin_lookout_tables'))
-
-#    db.plugin_lookout_datafiles.extension.requires = plugin_lookout_datafiles_types[1:9]
-#    form = SQLFORM.factory(
-#        db.plugin_lookout_tables,
-#        db.plugin_lookout_datafiles
-#    )
-#    
-#    ids=None
-#    if form.accepts(request, session, onvalidation=table_onvalidate):
-#    
-#        table_id = db.plugin_lookout_tables.insert(**db.plugin_lookout_tables._filter_fields(form.vars))
-#        form.vars.table_id=table_id
-#        file_id = db.plugin_lookout_datafiles.insert(**db.plugin_lookout_datafiles._filter_fields(form.vars))
-#        file_path = os.path.join(uploadfolder, db.plugin_lookout_datafiles[file_id].file_name)
-#        
-#        # uncompress the archive in new_dir
-#        new_dir = '.'.join(form.vars.file_name.split('.')[:-1])
-#        new_path = os.path.join(uploadfolder, new_dir)
-#        os.mkdir(new_path)
-#        ext = file_path.split('.')[-1]
-#        if ext in ('gz', 'bz2', ):
-#            file_path_new = '.'.join(file_path.split('.')[:-1] + ['tar', ext])
-#            os.rename(file_path, file_path_new)
-#            file_path = file_path_new
-#        extract(file_path, new_path)
-#        main_shp = [i for i in os.listdir(new_path) if i.split('.')[-1]=='shp'][0]
-#        shp_path = os.path.join(new_path, main_shp)
-#        
-#        driver = ogr.GetDriverByName('ESRI Shapefile')
-#        source = driver.Open(shp_path, 0)
-#        layer = source.GetLayer()
-#        # inspect field names and types
-#        ESRITypes = dict(String='string', Real='double', Date='date')
-#        layer_defn = layer.GetLayerDefn()
-#        layer_infos = [(layer_defn.GetFieldDefn(i).GetName(),
-#            ESRITypes[layer_defn.GetFieldDefn(i).GetTypeName()]) for i in xrange(layer_defn.GetFieldCount())]
-#        
-#        # setup geometry field
-#        ret = db.plugin_lookout_fields.validate_and_insert(
-#                table_id = table_id,
-#                field_name = 'the_geom',
-#                field_label = 'Geometric feature',
-#                field_type = 'geometry'
-#            )
-#        
-#        # setup attributes fields
-#        for field_name, field_type in layer_infos:
-#            ret = db.plugin_lookout_fields.validate_and_insert(
-#                table_id = table_id,
-#                field_name = field_name.lower(),
-#                field_label = field_name,
-#                field_type = field_type
-#            )
-#        
-#        import ipdb; ipdb.set_trace()
-#        table = globals()[db.plugin_lookout_connections[form.vars.connection_id].alias][form.vars.table_name]
-#        for index in xrange(layer.GetFeatureCount()):
-#            feature = layer.GetFeature(index)
-#            kwargs = dict([(fn[0].lower(), feature.GetField(fn[0])) for fn in layer_infos])
-#            if not hasattr(table['the_geom'], 'st_asgeojson'):
-#                kwargs['the_geom'] = feature.GetGeometryRef().ExportToWkb()
-#            else:
-#                kwargs['the_geom'] = feature.GetGeometryRef().ExportToWkt()
-#            
-#            ret = table.validate_and_insert(**kwargs)
-#            if ret.errors:
-#                raise IOError(str(ret.errors))
-#            else:
-#                ids.append = ret.id
-#        
-#        shutil.rmtree(new_path) # remove uncompressed files
-#        redirect(URL('plugin_lookout_fields',
-#                vars=dict(keywords='plugin_lookout_fields.table_id="%s"' % table_id)))
-
-#    return dict(form=form, ids=ids)
-
-#def init_shp_data():
-#    table_id = request.vars.table_id or redirect(URL('plugin_lookout_tables'))
-#    
-#    table_info = db.plugin_lookout_tables[table_id]
-#    
-#    if not table_info.is_active:
-#        session.flash = T('You cannot populate not active tables')
-#        redirect(URL('plugin_lookout_tables', args=['plugin_lookout_tables', 'edit', 'plugin_lookout_tables', table_id]))
-        
-
-#def import_shape():
-#    from archive import extract
-#    import ogr, shutil
-#    form = SQLFORM.factory(
-#        Field('connection_name', requires=IS_IN_DB(db(get_connection_set()), 'plugin_lookout_connections.alias', '%(alias)s')),
-#        Field('table_name'),
-#        Field('shp_archive', 'upload', uploadfolder=uploadfolder, label='File',
-#            comment=T('Supported archives are: .zip, .egg, .jar, .tar, .tar.gz, .tgz, .tar.bz2, .tz2'))
-#    )
-#    
-#    ESRITypes = dict(String='string', Real='double', Date='date')
-#    if form.accepts(request, session):
-#        
-#        file_path = os.path.join(uploadfolder, form.vars.shp_archive)
-#        new_dir = '.'.join(form.vars.shp_archive.split('.')[:-1])
-#        new_path = os.path.join(uploadfolder, new_dir)
-#        os.mkdir(new_path)
-#        ext = file_path.split('.')[-1]
-#        if ext in ('gz', 'bz2', ):
-#            file_path_new = '.'.join(file_path.split('.')[:-1] + ['tar', ext])
-#            os.rename(file_path, file_path_new)
-#            file_path = file_path_new
-#        extract(file_path, new_path)
-#        main_shp = [i for i in os.listdir(new_path) if i.split('.')[-1]=='shp'][0]
-#        form.vars.shp_path = os.path.join(new_path, main_shp)
-#        
-#        
-#        shutil.rmtree(new_dir)
-#        
-#        driver = ogr.GetDriverByName('ESRI Shapefile')
-#        source = driver.Open(form.vars.shp_path, 0)
-#        layer = source.GetLayer()
-#        layer_defn = layer.GetLayerDefn()
-#        field_infos = [(layer_defn.GetFieldDefn(i).GetName(),
-#            ESRITypes[layer_defn.GetFieldDefn(i).GetTypeName()]) for i in xrange(layer_defn.GetFieldCount())]
-#        
-##        for field_name, field_type in field_infos:
-##            kwargs = dict(
-##                
-##            )
-##            db.plugin_lookout_fields.
-#        
-#        for index in range(layer.GetFeatureCount())[:5]:
-#            feature = layer.GetFeature(index)
-#            print dict([(fn[0], (fn[1], feature.GetField(fn[0]))) for fn in field_names])
-#            wkt = feature.GetGeometryRef().ExportToWkt()
-#            print wkt
-#        
-
-#    return dict(form=form)
+    try:
+        initFromFile(db(db.plugin_lookout_datafiles.table_id==table_id).select().first().file_name, uploadfolder, table_id, db, ext_table)
+    except Exception, error:
+        session.flash = str(error)
+        redirect(URL('plugin_lookout_tables', vars=dict(keywords='id="%s"' % table_id)))
+    else:
+        redirect(URL('plugin_lookout_external_tables', vars=dict(table_id=table_id)))
 
 
 ################################################################## CREATE VIEW #
 
+@auth.requires_login()
 def create_view_step1_onvalidation(form):
-    ids = [form.vars.table_id] + form.vars.table_ids
-    res_tables = db(db.plugin_lookout_tables.id.belongs(ids)).select()
-    if len(set([i.connection_name for i in res_tables]))>1:
-        error_message = T('Table to join must belong to the same connection')
+    '''
+    condizione aggiuntiva: Le tabelle da unire nel join della vista devono
+    appartenere allo stesso database
+    '''
+    ids = [form.vars[i] for i in ('main_table_id', 'left_table_id', )]
+    res = db(db.plugin_lookout_tables.id.belongs(ids)).select(db.plugin_lookout_tables.connection_id, distinct=True)
+    if len(res) > 1:
+        error_message = T('Table to join must belong to the same database')
         form.errors.table_ids = error_message
         form.errors.table_id = error_message
-        
-
+    elif len(set(ids)) == 1:
+        error_message = T('Please choose two different tables to be joined')
+        form.errors.table_ids = error_message
+        form.errors.table_id = error_message
+    
+    value, error = IS_VALID_SQL_TABLE_NAME(globals()[db\
+        .plugin_lookout_connections(db.plugin_lookout_tables.id==request.vars.main_table_id)\
+            .connection_name], check_reserved=('common', 'postgres', ))(form.vars.view_name)
+    if error:
+        form.errors.view_name = error
+    
 @auth.requires_login()
 def create_view_step1():
     message = 'Here you can create table views that join two tables with a field in common. \
     Choose the two tables from the lists below.'
     table_set = db(get_table_set(view_only=False))
     form = SQLFORM.factory(
-#        Field('view_name', label=T("Views's name"), comment=T("Name of the view to be create"),
-#            requires=plugin_metadb.IS_VALID_SQL_TABLE_NAME(globals()[db.plugin_lookout_connections[request.vars.connection].connection_name], check_reserved=('common', 'postgres', ))),
-        Field('table_id', 'integer',
+        Field('view_name', label=T("Views's name"),
+            comment=T("Name of the view to be create")),
+        Field('main_table_id', 'integer',
             requires = IS_IN_DB(table_set, 'plugin_lookout_tables.id', '%(table_name)s (from %(connection_name)s)')),
-        Field('table_ids', 'list:integers',
-            requires = IS_IN_DB(table_set, 'plugin_lookout_tables.id', '%(table_name)s (from %(connection_name)s)', multiple=True)
+        Field('left_table_id', 'integer',
+            requires = IS_IN_DB(table_set, 'plugin_lookout_tables.id', '%(table_name)s (from %(connection_name)s)')
         )
     )
     
     if form.accepts(request, session, onvalidation=create_view_step1_onvalidation):
-        try:
-            idx = form.vars.table_ids.index(form.vars.table_id)
-        except ValueError, error:
-            pass
-        else:
-            form.vars.table_ids.pop(idx)
-        print form.vars.table_ids
-        if not form.vars.table_ids: return dict(form=form)
-        session.create_view_step2 = form.vars
-        redirect(URL('create_view_step2'))
+        redirect(URL('create_view_step2', vars=form.vars))
     
     return dict(form=form)
+
+#def add_fields(tab_id, new_fields):
+#    for f in new_fields:
+#        
+#    
+#    
+#        query = (db.meta_fields.field_name==f[0])&(db.meta_fields.tab_id.contains(tab_id))
+#        if db(query).count():
+#            old_vals = db(query).select(db.meta_fields.tab_id).first().tab_id
+#            db(query).validate_and_update(tab_id=old_vals+[new_tab_id])
+#            db.commit()
+
+def onvalidation_create_view_step2(form):
+    '''
+    condizione aggiuntiva: solo un campo per ogni tabella
+    '''
+    res = db(db.plugin_lookout_fields.id.belongs(form.vars.join_keys_ids))\
+        .select(db.plugin_lookout_fields.table_id, distinct=True)
+    if len(res) != len(form.vars.join_keys_ids):
+        form.errors.ext_ref = T('Please choose just just one field form each table selected.')
+    elif len(set([i.field_type for i in res])) > 1:
+        form.errors.ext_ref = T('Choosen fields have to be of the same type!')
 
 @auth.requires_login()
 def create_view_step2():
-    
-    ids = [session.create_view_step2.table_id] + session.create_view_step2.table_ids
-    field_set = db(db.plugin_lookout_fields.table_id.belongs(ids))
+
+    main_table = db.plugin_lookout_tables[request.vars.main_table_id]
+#    left_table = db.plugin_lookout_tables[session.create_view_step2[left_table_id]]
+    table_ids = (request.vars.main_table_id, request.vars.left_table_id, )
+    field_set = db(db.plugin_lookout_fields.table_id.belongs(table_ids))
     form = SQLFORM.factory(
-        Field('ext_ref', label=T('Join column name'),
-            requires = IS_IN_DB(field_set, 'plugin_lookout_fields.id', '%(field_name)s in table: %(table_id)s')
-        )
+        Field('join_keys_ids', 'list:reference db.plugin_lookout_fields', label=T('Join column names'),
+            requires = IS_IN_DB(field_set, 'plugin_lookout_fields.id', '%(field_name)s [ %(table_id)s ]', multiple=True)),
+        Field('other_fields_ids', 'list:reference db.plugin_lookout_fields', label=T('Columns included in join result'),
+            requires = IS_IN_DB(field_set, 'plugin_lookout_fields.id', '%(field_name)s [ %(table_id)s ]', multiple=True))
     )
+    
+    # attenzione evitare i record la cui chiave di join è None!!!!!!!!!!!!!!!!!!
+
+    if form.accepts(request, session):
+    
+        # registrazione della vista
+        ret_tab = db.plugin_lookout_tables.validate_and_insert(
+            table_name = request.vars.view_name,
+            connection_id = main_table.connection_id,
+            is_view=True,
+            is_active=True
+        )
+        if ret_tab.errors:
+            session.flash = str(ret_tab.errors)
+            redirect(URL('create_view_step1'))
+        else:
+            request.vars.new_tab_id = ret_tab.id
+
+        if not form.vars.other_fields_ids:
+            fields_condition = db.plugin_lookout_fields.table_id.belongs(
+                db(db.plugin_lookout_fields.id.belongs(form.vars.join_keys_ids))\
+                    ._select(db.plugin_lookout_fields.table_id)
+            )
+        else:
+            fields_condition = db.plugin_lookout_fields.id.belongs(form.vars.other_fields_ids)
+
+        # registrazione dei campi della vista duplicati dalle tabelle in join
+        join = db.plugin_lookout_fields.table_id==db.plugin_lookout_tables.id
+        field_selection = db(join & fields_condition).select(db.plugin_lookout_tables.ALL, db.plugin_lookout_fields.ALL)
+        for rec_field in field_selection:
+            rec_field.plugin_lookout_fields['table_id'] = ret_tab.id
+            ret = db.plugin_lookout_fields.validate_and_insert(**db.plugin_lookout_fields\
+                ._filter_fields(rec_field.plugin_lookout_fields))
+            if ret.errors:
+                raise Exception(str(ret.errors))
+
+        key_fields = db(join & db.plugin_lookout_fields.id.belongs(request.vars.join_keys_ids)).select()
+#        main_table = db.plugin_lookout_tables[request.vars.main_table_id]
+        left_table = db.plugin_lookout_tables[request.vars.left_table_id]
+        mydb = globals()[left_table.connection_name]
+        condition = (mydb[key_fields.first().plugin_lookout_tables.table_name][key_fields.first().plugin_lookout_fields.field_name]!=None)\
+            &(mydb[key_fields.last().plugin_lookout_tables.table_name][key_fields.last().plugin_lookout_fields.field_name]!=None)
+        left_join = mydb[left_table.table_name].on(
+            mydb[key_fields.first().plugin_lookout_tables.table_name][key_fields.first().plugin_lookout_fields.field_name]==mydb[key_fields.last().plugin_lookout_tables.table_name][key_fields.last().plugin_lookout_fields.field_name]
+        )
+        fields_in_view = [mydb[f.plugin_lookout_tables.table_name][f.plugin_lookout_fields.field_name] for f in field_selection if not f in key_fields]
+        sql_select = mydb(condition)._select(*fields_in_view, left=left_join)
+        request.vars['sql_select'] = sql_select
+
+        request.vars['join_keys_ids'] = form.vars.join_keys_ids
+        redirect(URL('create_view_step3', vars=request.vars))
 
     return dict(form=form)
+
+
+@auth.requires_login()
+def create_view_step3():
+    
+    # creazione della vista su db
+    main_table = db.plugin_lookout_tables[request.vars.main_table_id]
+    mydb = globals()[main_table.connection_name]
+    
+#    form = SQLFORM.factory()
+#    
+#    if form.accepts(request):
+#        redirect(URL('plugin_lookout_tables'))
+    
+    fields_in_view = [globals()[main_table.connection_name][request.vars.view_name][field_name] for field_name in globals()[main_table.connection_name][request.vars.view_name].fields]
+    
+    sql_create = "CREATE OR REPLACE VIEW %s AS %s;" %(request.vars.view_name, request.vars.sql_select)
+    
+    try:
+        mydb.executesql(sql_create)
+    except Exception, error:
+        session.flash = str(error)
+        db.plugin_lookout_tables[request.vars.new_tab_id].update_record(is_active=False)
+        redirect(URL('create_view_step1'))
+    else:
+        redirect(URL('plugin_lookout_tables'))
+
